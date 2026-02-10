@@ -926,4 +926,5 @@
 	richColors
 	position="top-right"
 	closeButton
+	duration={3000}
 />

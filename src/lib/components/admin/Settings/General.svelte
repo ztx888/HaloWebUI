@@ -165,77 +165,67 @@
 											href="https://github.com/open-webui/open-webui/releases/tag/v{version.latest}"
 											target="_blank"
 										>
-											{updateAvailable === null
-												? $i18n.t('Checking for updates...')
-												: updateAvailable
-													? `(v${version.latest} ${$i18n.t('available!')})`
-													: $i18n.t('(latest)')}
-										</a>
-									{/if}
-								</div>
-
-								<button
-									class=" underline flex items-center space-x-1 text-xs text-gray-500 dark:text-gray-500"
-									type="button"
-									on:click={() => {
-										showChangelog.set(true);
-									}}
-								>
-									<div>{$i18n.t("See what's new")}</div>
-								</button>
-							</div>
-
-							{#if $config?.features?.enable_version_update_check}
-								<button
-									class=" text-xs px-3 py-1.5 bg-gray-50 hover:bg-gray-100 dark:bg-gray-850 dark:hover:bg-gray-800 transition rounded-lg font-medium"
-									type="button"
-									on:click={() => {
-										checkForVersionUpdates();
-									}}
-								>
-									{$i18n.t('Check for updates')}
-								</button>
-							{/if}
-						</div>
-					</div>
-
-					<div class="mb-2.5">
-						<div class="flex w-full justify-between items-center">
-							<div class="text-xs pr-2">
-								<div class="">
-									{$i18n.t('Help')}
-								</div>
-								<div class=" text-xs text-gray-500">
-									{$i18n.t('Discover how to use Open WebUI and seek support from the community.')}
+											<path
+												d="M11.25 4.533A9.707 9.707 0 006 3a9.735 9.735 0 00-3.25.555.75.75 0 00-.5.707v14.25a.75.75 0 001 .75c.799 0 1.579-.17 2.25-.515.65.347 1.408.514 2.25.514 1.304 0 2.508-.346 3.498-1.002.046-.03.093-.061.14-.092A9.71 9.71 0 0118 19.5c.789 0 1.543-.162 2.25-.48a.75.75 0 00-.5-1.396A8.21 8.21 0 0018 18a8.215 8.215 0 00-3.528-1.07V4.532zM12.75 4.533c.961-.636 2.13-1.001 3.42-1.001A9.713 9.713 0 0121.75 4.25a.75.75 0 01-.5.707V19.2a.75.75 0 01-1 .75c-.799 0-1.579.17-2.25.515-.65-.347-1.408-.514-2.25-.514-1.304 0-2.508.346-3.498 1.002-.046.03-.093.061-.14.092A9.71 9.71 0 0111.25 19.5v-14.967z"
+											/>
+										</svg>
+										<span>{$i18n.t('Documentation')}</span>
+									</a>
+									<a
+										href="https://github.com/zhizinan1997/open-webui-xinban"
+										target="_blank"
+										class="flex items-center gap-2.5 text-sm font-medium text-gray-700 dark:text-gray-200 hover:text-blue-600 dark:hover:text-blue-400 transition"
+									>
+										<svg
+											xmlns="http://www.w3.org/2000/svg"
+											viewBox="0 0 24 24"
+											fill="currentColor"
+											class="w-5 h-5 opacity-70"
+										>
+											<path
+												fill-rule="evenodd"
+												d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"
+												clip-rule="evenodd"
+											/>
+										</svg>
+										<span>{$i18n.t('GitHub Repository')}</span>
+									</a>
 								</div>
 							</div>
 
-							<a
-								class="flex-shrink-0 text-xs font-medium underline"
-								href="https://docs.openwebui.com/"
-								target="_blank"
-							>
-								{$i18n.t('Documentation')}
-							</a>
-						</div>
+							<div class="mt-4 pt-4 border-t border-gray-100 dark:border-gray-800">
+								<a href="https://github.com/zhizinan1997/open-webui-xinban" target="_blank" class="block">
+											<path
+												d="M11.25 4.533A9.707 9.707 0 006 3a9.735 9.735 0 00-3.25.555.75.75 0 00-.5.707v14.25a.75.75 0 001 .75c.799 0 1.579-.17 2.25-.515.65.347 1.408.514 2.25.514 1.304 0 2.508-.346 3.498-1.002.046-.03.093-.061.14-.092A9.71 9.71 0 0118 19.5c.789 0 1.543-.162 2.25-.48a.75.75 0 00-.5-1.396A8.21 8.21 0 0018 18a8.215 8.215 0 00-3.528-1.07V4.532zM12.75 4.533c.961-.636 2.13-1.001 3.42-1.001A9.713 9.713 0 0121.75 4.25a.75.75 0 01-.5.707V19.2a.75.75 0 01-1 .75c-.799 0-1.579.17-2.25.515-.65-.347-1.408-.514-2.25-.514-1.304 0-2.508.346-3.498 1.002-.046.03-.093.061-.14.092A9.71 9.71 0 0111.25 19.5v-14.967z"
+											/>
+										</svg>
+										<span>{$i18n.t('Documentation')}</span>
+									</a>
+									<a
+										href="https://github.com/zhizinan1997/open-webui-xinban"
+										target="_blank"
+										class="flex items-center gap-2.5 text-sm font-medium text-gray-700 dark:text-gray-200 hover:text-blue-600 dark:hover:text-blue-400 transition"
+									>
+										<svg
+											xmlns="http://www.w3.org/2000/svg"
+											viewBox="0 0 24 24"
+											fill="currentColor"
+											class="w-5 h-5 opacity-70"
+										>
+											<path
+												fill-rule="evenodd"
+												d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"
+												clip-rule="evenodd"
+											/>
+										</svg>
+										<span>{$i18n.t('GitHub Repository')}</span>
+									</a>
+								</div>
+							</div>
 
-						<div class="mt-1">
-							<div class="flex space-x-1">
-								<a href="https://discord.gg/5rJgQTnV4s" target="_blank">
-									<img
-										alt="Discord"
-										src="https://img.shields.io/badge/Discord-Open_WebUI-blue?logo=discord&logoColor=white"
-									/>
-								</a>
-
-								<a href="https://twitter.com/OpenWebUI" target="_blank">
-									<img
-										alt="X (formerly Twitter) Follow"
-										src="https://img.shields.io/twitter/follow/OpenWebUI"
-									/>
-								</a>
-
-								<a href="https://github.com/open-webui/open-webui" target="_blank">
+							<div class="mt-4 pt-4 border-t border-gray-100 dark:border-gray-800">
+								<a href="https://github.com/zhizinan1997/open-webui-xinban" target="_blank" class="block">
+>>>>>>> 777546578 (Handle inline images, update links & toast pos)
 									<img
 										alt="Github Repo"
 										src="https://img.shields.io/github/stars/open-webui/open-webui?style=social&label=Star us on Github"
