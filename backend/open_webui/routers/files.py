@@ -676,6 +676,7 @@ async def get_file_content_by_id(
 
     if (
         file.user_id == user.id
+        or file.user_id == "system"  # System-generated files (e.g. AI images) are accessible to all authenticated users
         or user.role == "admin"
         or has_access_to_file(id, "read", user, db=db)
     ):
@@ -706,6 +707,11 @@ async def get_file_content_by_id(
                             f"inline; filename*=UTF-8''{encoded_filename}"
                         )
                         content_type = "application/pdf"
+                    elif content_type and content_type.startswith("image/"):
+                        # Serve images inline so they render in <img> tags
+                        headers["Content-Disposition"] = (
+                            f"inline; filename*=UTF-8''{encoded_filename}"
+                        )
                     elif content_type != "text/plain":
                         headers["Content-Disposition"] = (
                             f"attachment; filename*=UTF-8''{encoded_filename}"

@@ -160,3 +160,4 @@ alipay-sdk-python==3.7.796
 
 # Credit system
 jsonpath-ng==1.7.0
+  

@@ -82,6 +82,7 @@ if WEBSOCKET_MANAGER == "redis":
         ping_interval=WEBSOCKET_SERVER_PING_INTERVAL,
         ping_timeout=WEBSOCKET_SERVER_PING_TIMEOUT,
         engineio_logger=WEBSOCKET_SERVER_ENGINEIO_LOGGING,
+        max_http_buffer_size=100 * 1024 * 1024,  # 100MB, support large AI-generated images
     )
 else:
     sio = socketio.AsyncServer(
@@ -94,6 +95,7 @@ else:
         ping_interval=WEBSOCKET_SERVER_PING_INTERVAL,
         ping_timeout=WEBSOCKET_SERVER_PING_TIMEOUT,
         engineio_logger=WEBSOCKET_SERVER_ENGINEIO_LOGGING,
+        max_http_buffer_size=100 * 1024 * 1024,  # 100MB, support large AI-generated images
     )
 
 
