@@ -1,4 +1,4 @@
-<script lang="ts">
+﻿<script lang="ts">
 	import { toast } from 'svelte-sonner';
 	import { v4 as uuidv4 } from 'uuid';
 
@@ -825,6 +825,43 @@
 						</Tooltip>
 					</div>
 				{/if}
+
+				<div class="">
+					<Tooltip content={$i18n.t('公式转换 (Beta)')} placement="right">
+						<a
+							class=" cursor-pointer flex rounded-xl hover:bg-gray-100 dark:hover:bg-gray-850 transition group"
+							href="/formula"
+							on:click={async (e) => {
+								e.stopImmediatePropagation();
+								e.preventDefault();
+
+								goto('/formula');
+								itemClickHandler();
+							}}
+							aria-label={$i18n.t('公式转换')}
+							draggable="false"
+						>
+							<div class=" self-center flex items-center justify-center size-9 relative">
+								<span
+									class="absolute -top-1 -right-1 px-1 py-[1px] text-[9px] font-bold leading-none rounded-full bg-slate-200 text-slate-700 border border-slate-300 dark:bg-slate-700 dark:text-slate-100 dark:border-slate-600"
+								>
+									B
+								</span>
+								<svg
+									xmlns="http://www.w3.org/2000/svg"
+									fill="none"
+									viewBox="0 0 24 24"
+									stroke-width="2"
+									stroke="currentColor"
+									class="size-4.5"
+								>
+									<path stroke-linecap="round" stroke-linejoin="round" d="M7.5 5.75h9M7.5 18.25h9M9 6l6 12M15 6l-6 12" />
+									<circle cx="18.5" cy="5.5" r="1.25" />
+								</svg>
+							</div>
+						</a>
+					</Tooltip>
+				</div>
 			</div>
 		</button>
 
@@ -1053,6 +1090,40 @@
 							</a>
 						</div>
 					{/if}
+
+					<div class="px-[0.4375rem] flex justify-center text-gray-800 dark:text-gray-200">
+						<a
+							id="sidebar-formula-button"
+							class="grow flex items-center gap-3 rounded-xl px-2.5 py-2 hover:bg-gray-100 dark:hover:bg-gray-850 transition"
+							href="/formula"
+							on:click={itemClickHandler}
+							draggable="false"
+							aria-label={$i18n.t('公式转换')}
+						>
+							<div class="flex items-center justify-center w-7 h-7 rounded-lg bg-gray-200 dark:bg-gray-700">
+								<svg
+									xmlns="http://www.w3.org/2000/svg"
+									fill="none"
+									viewBox="0 0 24 24"
+									stroke-width="2"
+									stroke="currentColor"
+									class="size-3.5 text-gray-600 dark:text-gray-300"
+								>
+									<path stroke-linecap="round" stroke-linejoin="round" d="M7.5 5.75h9M7.5 18.25h9M9 6l6 12M15 6l-6 12" />
+									<circle cx="18.5" cy="5.5" r="1.25" />
+								</svg>
+							</div>
+
+							<div class="flex self-center items-center gap-1.5">
+								<div class="self-center text-sm font-medium">{$i18n.t('公式转换')}</div>
+								<span
+									class="self-center px-1.5 py-[1px] text-[10px] leading-4 font-semibold rounded-md bg-slate-100 text-slate-700 dark:bg-slate-700/80 dark:text-slate-100 border border-slate-200 dark:border-slate-600"
+								>
+									BETA
+								</span>
+							</div>
+						</a>
+					</div>
 				</div>
 
 				{#if ($models ?? []).length > 0 && (($settings?.pinnedModels ?? []).length > 0 || $config?.default_pinned_models)}
@@ -1455,3 +1526,5 @@
 		</div>
 	{/if}
 {/if}
+
+

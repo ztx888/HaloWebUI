@@ -82,6 +82,7 @@ async def get_task_config(request: Request, user=Depends(get_verified_user)):
         "QUERY_GENERATION_PROMPT_TEMPLATE": request.app.state.config.QUERY_GENERATION_PROMPT_TEMPLATE,
         "TOOLS_FUNCTION_CALLING_PROMPT_TEMPLATE": request.app.state.config.TOOLS_FUNCTION_CALLING_PROMPT_TEMPLATE,
         "VOICE_MODE_PROMPT_TEMPLATE": request.app.state.config.VOICE_MODE_PROMPT_TEMPLATE,
+        "MATH_OCR_MODEL_ID": request.app.state.config.MATH_OCR_MODEL_ID,
     }
 
 
@@ -102,6 +103,7 @@ class TaskConfigForm(BaseModel):
     QUERY_GENERATION_PROMPT_TEMPLATE: str
     TOOLS_FUNCTION_CALLING_PROMPT_TEMPLATE: str
     VOICE_MODE_PROMPT_TEMPLATE: Optional[str]
+    MATH_OCR_MODEL_ID: Optional[str]
 
 
 @router.post("/config/update")
@@ -155,6 +157,8 @@ async def update_task_config(
         form_data.VOICE_MODE_PROMPT_TEMPLATE
     )
 
+    request.app.state.config.MATH_OCR_MODEL_ID = form_data.MATH_OCR_MODEL_ID
+
     return {
         "TASK_MODEL": request.app.state.config.TASK_MODEL,
         "TASK_MODEL_EXTERNAL": request.app.state.config.TASK_MODEL_EXTERNAL,
@@ -172,6 +176,7 @@ async def update_task_config(
         "QUERY_GENERATION_PROMPT_TEMPLATE": request.app.state.config.QUERY_GENERATION_PROMPT_TEMPLATE,
         "TOOLS_FUNCTION_CALLING_PROMPT_TEMPLATE": request.app.state.config.TOOLS_FUNCTION_CALLING_PROMPT_TEMPLATE,
         "VOICE_MODE_PROMPT_TEMPLATE": request.app.state.config.VOICE_MODE_PROMPT_TEMPLATE,
+        "MATH_OCR_MODEL_ID": request.app.state.config.MATH_OCR_MODEL_ID,
     }
 
 

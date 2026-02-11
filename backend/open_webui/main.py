@@ -97,6 +97,7 @@ from open_webui.routers import (
     tools,
     users,
     utils,
+    math_ocr,
     scim,
     credit,
 )
@@ -448,6 +449,7 @@ from open_webui.config import (
     # Tasks
     TASK_MODEL,
     TASK_MODEL_EXTERNAL,
+    MATH_OCR_MODEL_ID,
     ENABLE_TAGS_GENERATION,
     ENABLE_TITLE_GENERATION,
     ENABLE_FOLLOW_UP_GENERATION,
@@ -1327,6 +1329,7 @@ app.state.speech_speaker_embeddings_dataset = None
 
 app.state.config.TASK_MODEL = TASK_MODEL
 app.state.config.TASK_MODEL_EXTERNAL = TASK_MODEL_EXTERNAL
+app.state.config.MATH_OCR_MODEL_ID = MATH_OCR_MODEL_ID
 
 
 app.state.config.ENABLE_SEARCH_QUERY_GENERATION = ENABLE_SEARCH_QUERY_GENERATION
@@ -1585,6 +1588,7 @@ app.include_router(openai.router, prefix="/openai", tags=["openai"])
 
 app.include_router(pipelines.router, prefix="/api/v1/pipelines", tags=["pipelines"])
 app.include_router(tasks.router, prefix="/api/v1/tasks", tags=["tasks"])
+app.include_router(math_ocr.router, prefix="/api/v1/math-ocr", tags=["math-ocr"])
 app.include_router(images.router, prefix="/api/v1/images", tags=["images"])
 
 app.include_router(audio.router, prefix="/api/v1/audio", tags=["audio"])

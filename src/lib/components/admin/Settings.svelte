@@ -23,6 +23,7 @@
 	import Tools from './Settings/Tools.svelte';
 	import Credit from './Settings/Credit.svelte';
 	import SplashNotification from './Settings/SplashNotification.svelte';
+	import MathOCR from './Settings/MathOCR.svelte';
 
 	import ChartBar from '../icons/ChartBar.svelte';
 	import DocumentChartBar from '../icons/DocumentChartBar.svelte';
@@ -39,6 +40,7 @@
 		const tabFromPath = pathParts[pathParts.length - 1];
 		selectedTab = [
 			'general',
+			'math-ocr',
 			'splash-notification',
 			'credit',
 			'connections',
@@ -97,6 +99,12 @@
 				'community',
 				'channels'
 			]
+		},
+		{
+			id: 'math-ocr',
+			title: '公式转换',
+			route: '/admin/settings/math-ocr',
+			keywords: ['math', 'ocr', 'latex', 'formula', 'equation', 'recognition', 'model']
 		},
 		{
 			id: 'splash-notification',
@@ -369,6 +377,20 @@
 								clip-rule="evenodd"
 							/>
 						</svg>
+					{:else if tab.id === 'math-ocr'}
+						<svg
+							xmlns="http://www.w3.org/2000/svg"
+							viewBox="0 0 16 16"
+							fill="currentColor"
+							class="w-3.5 h-3.5 text-gray-600 dark:text-gray-300"
+						>
+							<path
+								d="M2 3a1 1 0 0 1 1-1h10a1 1 0 1 1 0 2H3a1 1 0 0 1-1-1ZM2 13a1 1 0 0 1 1-1h10a1 1 0 1 1 0 2H3a1 1 0 0 1-1-1Z"
+							/>
+							<path
+								d="M4.293 11.707a1 1 0 0 1 0-1.414L6.586 8 4.293 5.707a1 1 0 1 1 1.414-1.414L8 6.586l2.293-2.293a1 1 0 0 1 1.414 1.414L9.414 8l2.293 2.293a1 1 0 0 1-1.414 1.414L8 9.414l-2.293 2.293a1 1 0 0 1-1.414 0Z"
+							/>
+						</svg>
 					{:else if tab.id === 'splash-notification'}
 						<svg
 							xmlns="http://www.w3.org/2000/svg"
@@ -560,6 +582,14 @@
 				saveHandler={async () => {
 					toast.success($i18n.t('Settings saved successfully!'));
 
+					await tick();
+					await config.set(await getBackendConfig());
+				}}
+			/>
+		{:else if selectedTab === 'math-ocr'}
+			<MathOCR
+				saveHandler={async () => {
+					toast.success($i18n.t('Settings saved successfully!'));
 					await tick();
 					await config.set(await getBackendConfig());
 				}}
