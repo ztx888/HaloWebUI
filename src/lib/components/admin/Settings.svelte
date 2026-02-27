@@ -21,6 +21,8 @@
 	import Evaluations from './Settings/Evaluations.svelte';
 	import CodeExecution from './Settings/CodeExecution.svelte';
 	import Tools from './Settings/Tools.svelte';
+	import Credit from './Settings/Credit.svelte';
+	import SplashNotification from './Settings/SplashNotification.svelte';
 
 	import ChartBar from '../icons/ChartBar.svelte';
 	import DocumentChartBar from '../icons/DocumentChartBar.svelte';
@@ -37,6 +39,8 @@
 		const tabFromPath = pathParts[pathParts.length - 1];
 		selectedTab = [
 			'general',
+			'splash-notification',
+			'credit',
 			'connections',
 			'models',
 			'evaluations',
@@ -93,6 +97,27 @@
 				'community',
 				'channels'
 			]
+		},
+		{
+			id: 'splash-notification',
+			title: 'Splash Notification',
+			route: '/admin/settings/splash-notification',
+			keywords: [
+				'splash',
+				'notification',
+				'announcement',
+				'popup',
+				'notice',
+				'通知',
+				'公告',
+				'开屏'
+			]
+		},
+		{
+			id: 'credit',
+			title: 'Credit',
+			route: '/admin/settings/credit',
+			keywords: ['credit', 'billing', 'payment', 'balance']
 		},
 		{
 			id: 'connections',
@@ -344,6 +369,30 @@
 								clip-rule="evenodd"
 							/>
 						</svg>
+					{:else if tab.id === 'splash-notification'}
+						<svg
+							xmlns="http://www.w3.org/2000/svg"
+							viewBox="0 0 16 16"
+							fill="currentColor"
+							class="w-3.5 h-3.5 text-gray-600 dark:text-gray-300"
+						>
+							<path
+								d="M3.5 9.5a.75.75 0 0 1 .75.75v1a.75.75 0 0 1-1.5 0v-1a.75.75 0 0 1 .75-.75ZM8.75 9.5a.75.75 0 0 0-.75.75v1a.75.75 0 0 0 1.5 0v-1a.75.75 0 0 0-.75-.75ZM2.207 2.293a1 1 0 0 1 1.414 0L4.854 3.52A5.999 5.999 0 0 1 12 3.51l1.236-1.217a1 1 0 1 1 1.4 1.424L13.42 4.926A5.98 5.98 0 0 1 14 8H2c0-1.144.32-2.213.876-3.123L1.793 3.707a1 1 0 0 1 0-1.414l.414.414-.414-.414ZM10.5 9.5a.75.75 0 0 1 .75.75v1a.75.75 0 0 1-1.5 0v-1a.75.75 0 0 1 .75-.75Z"
+							/>
+						</svg>
+					{:else if tab.id === 'credit'}
+						<svg
+							xmlns="http://www.w3.org/2000/svg"
+							viewBox="0 0 16 16"
+							fill="currentColor"
+							class="w-3.5 h-3.5 text-gray-600 dark:text-gray-300"
+						>
+							<path
+								fill-rule="evenodd"
+								d="M2 4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1h1a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V4zm10 0H4v8h8V4zm2 2h-1v4h1V6zm-3 2a1 1 0 1 1-2 0 1 1 0 0 1 2 0z"
+								clip-rule="evenodd"
+							/>
+						</svg>
 					{:else if tab.id === 'connections'}
 						<svg
 							xmlns="http://www.w3.org/2000/svg"
@@ -547,6 +596,24 @@
 			/>
 		{:else if selectedTab === 'code-execution'}
 			<CodeExecution
+				saveHandler={async () => {
+					toast.success($i18n.t('Settings saved successfully!'));
+
+					await tick();
+					await config.set(await getBackendConfig());
+				}}
+			/>
+		{:else if selectedTab === 'splash-notification'}
+			<SplashNotification
+				saveHandler={async () => {
+					toast.success($i18n.t('Settings saved successfully!'));
+
+					await tick();
+					await config.set(await getBackendConfig());
+				}}
+			/>
+		{:else if selectedTab === 'credit'}
+			<Credit
 				saveHandler={async () => {
 					toast.success($i18n.t('Settings saved successfully!'));
 

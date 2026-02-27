@@ -75,12 +75,19 @@ def verify_signature(payload: str, signature: str) -> bool:
 
 
 def override_static(path: str, content: str):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-
-    r = requests.get(content, stream=True)
-    with open(path, "wb") as f:
-        r.raw.decode_content = True
-        shutil.copyfileobj(r.raw, f)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        
+        # Add timeout to prevent hanging during startup
+        r = requests.get(content, stream=True, timeout=10)
+        r.raise_for_status()  # Raise exception for bad status codes
+        
+        with open(path, "wb") as f:
+            r.raw.decode_content = True
+            shutil.copyfileobj(r.raw, f)
+        log.info(f"Successfully downloaded custom resource: {content} -> {path}")
+    except Exception as e:
+        log.warning(f"Failed to download custom resource {content}: {e}")
 
 
 def get_license_data(app, key):

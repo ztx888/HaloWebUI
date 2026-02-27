@@ -1,0 +1,28 @@
+services:
+  open-webui-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: openwebui-xinban2:dev
+    container_name: open-webui-dev
+    ports:
+      - '3002:8080'
+    volumes:
+      # 挂载后端代码 - 修改后自动生效（uvicorn 有 --reload）
+      - ./backend:/app/backend
+      # 数据持久化
+      - open-webui-dev:/app/backend/data
+    environment:
+      - WEBUI_SECRET_KEY=zzn1997912
+      - ENV=dev
+      - PYTHONPATH=/app/backend
+      # 其他环境变量从 .env 文件读取
+    env_file:
+      - C:/Users/Ryan/Downloads/.env
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    restart: unless-stopped
+    command: bash -c "cd /app/backend && uvicorn open_webui.main:app --host 0.0.0.0 --port 8080 --reload"
+
+volumes:
+  open-webui-dev:

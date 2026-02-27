@@ -57,8 +57,10 @@ from starsessions import (
 )
 from starsessions.stores.redis import RedisStore
 
+from open_webui.models.credits import Credits
 from open_webui.utils import logger
 from open_webui.utils.audit import AuditLevel, AuditLoggingMiddleware
+from open_webui.utils.credit.utils import is_free_request, check_credit_by_user_id
 from open_webui.utils.logger import start_logger
 from open_webui.socket.main import (
     MODELS,
@@ -96,6 +98,7 @@ from open_webui.routers import (
     users,
     utils,
     scim,
+    credit,
 )
 
 from open_webui.routers.retrieval import (
@@ -365,6 +368,9 @@ from open_webui.config import (
     WEBUI_AUTH,
     WEBUI_NAME,
     WEBUI_BANNERS,
+    SPLASH_NOTIFICATION_ENABLED,
+    SPLASH_NOTIFICATION_TITLE,
+    SPLASH_NOTIFICATION_CONTENT,
     WEBHOOK_URL,
     ADMIN_EMAIL,
     SHOW_ADMIN_DETAILS,
@@ -459,6 +465,32 @@ from open_webui.config import (
     AUTOCOMPLETE_GENERATION_INPUT_MAX_LENGTH,
     AppConfig,
     reset_config,
+    CREDIT_NO_CHARGE_EMPTY_RESPONSE,
+    CREDIT_NO_CREDIT_MSG,
+    USAGE_CALCULATE_MODEL_PREFIX_TO_REMOVE,
+    USAGE_DEFAULT_ENCODING_MODEL,
+    USAGE_CALCULATE_FEATURE_IMAGE_GEN_PRICE,
+    USAGE_CALCULATE_FEATURE_CODE_EXECUTE_PRICE,
+    USAGE_CALCULATE_FEATURE_WEB_SEARCH_PRICE,
+    USAGE_CALCULATE_FEATURE_TOOL_SERVER_PRICE,
+    EZFP_ENDPOINT,
+    EZFP_PID,
+    EZFP_KEY,
+    EZFP_CALLBACK_HOST,
+    EZFP_AMOUNT_CONTROL,
+    CREDIT_DEFAULT_CREDIT,
+    CREDIT_EXCHANGE_RATIO,
+    USAGE_CALCULATE_MINIMUM_COST,
+    EZFP_PAY_PRIORITY,
+    USAGE_CALCULATE_DEFAULT_EMBEDDING_PRICE,
+    USAGE_CUSTOM_PRICE_CONFIG,
+    ALIPAY_AMOUNT_CONTROL,
+    ALIPAY_ALIPAY_PUBLIC_KEY,
+    ALIPAY_APP_PRIVATE_KEY,
+    ALIPAY_APP_ID,
+    ALIPAY_SERVER_URL,
+    ALIPAY_PRODUCT_CODE,
+    ALIPAY_CALLBACK_HOST,
 )
 from open_webui.env import (
     ENABLE_CUSTOM_MODEL_FALLBACK,
@@ -842,6 +874,9 @@ app.state.config.RESPONSE_WATERMARK = RESPONSE_WATERMARK
 app.state.config.USER_PERMISSIONS = USER_PERMISSIONS
 app.state.config.WEBHOOK_URL = WEBHOOK_URL
 app.state.config.BANNERS = WEBUI_BANNERS
+app.state.config.SPLASH_NOTIFICATION_ENABLED = SPLASH_NOTIFICATION_ENABLED
+app.state.config.SPLASH_NOTIFICATION_TITLE = SPLASH_NOTIFICATION_TITLE
+app.state.config.SPLASH_NOTIFICATION_CONTENT = SPLASH_NOTIFICATION_CONTENT
 
 
 app.state.config.ENABLE_FOLDERS = ENABLE_FOLDERS
@@ -1325,6 +1360,49 @@ app.state.config.VOICE_MODE_PROMPT_TEMPLATE = VOICE_MODE_PROMPT_TEMPLATE
 
 
 ########################################
+# Usage
+########################################
+
+app.state.config.CREDIT_NO_CHARGE_EMPTY_RESPONSE = CREDIT_NO_CHARGE_EMPTY_RESPONSE
+app.state.config.CREDIT_NO_CREDIT_MSG = CREDIT_NO_CREDIT_MSG
+app.state.config.CREDIT_EXCHANGE_RATIO = CREDIT_EXCHANGE_RATIO
+app.state.config.CREDIT_DEFAULT_CREDIT = CREDIT_DEFAULT_CREDIT
+app.state.config.USAGE_CALCULATE_MODEL_PREFIX_TO_REMOVE = (
+    USAGE_CALCULATE_MODEL_PREFIX_TO_REMOVE
+)
+app.state.config.USAGE_DEFAULT_ENCODING_MODEL = USAGE_DEFAULT_ENCODING_MODEL
+app.state.config.USAGE_CALCULATE_DEFAULT_EMBEDDING_PRICE = (
+    USAGE_CALCULATE_DEFAULT_EMBEDDING_PRICE
+)
+app.state.config.USAGE_CALCULATE_FEATURE_IMAGE_GEN_PRICE = (
+    USAGE_CALCULATE_FEATURE_IMAGE_GEN_PRICE
+)
+app.state.config.USAGE_CALCULATE_FEATURE_CODE_EXECUTE_PRICE = (
+    USAGE_CALCULATE_FEATURE_CODE_EXECUTE_PRICE
+)
+app.state.config.USAGE_CALCULATE_FEATURE_WEB_SEARCH_PRICE = (
+    USAGE_CALCULATE_FEATURE_WEB_SEARCH_PRICE
+)
+app.state.config.USAGE_CALCULATE_FEATURE_TOOL_SERVER_PRICE = (
+    USAGE_CALCULATE_FEATURE_TOOL_SERVER_PRICE
+)
+app.state.config.USAGE_CALCULATE_MINIMUM_COST = USAGE_CALCULATE_MINIMUM_COST
+app.state.config.USAGE_CUSTOM_PRICE_CONFIG = USAGE_CUSTOM_PRICE_CONFIG
+app.state.config.EZFP_PAY_PRIORITY = EZFP_PAY_PRIORITY
+app.state.config.EZFP_ENDPOINT = EZFP_ENDPOINT
+app.state.config.EZFP_PID = EZFP_PID
+app.state.config.EZFP_KEY = EZFP_KEY
+app.state.config.EZFP_CALLBACK_HOST = EZFP_CALLBACK_HOST
+app.state.config.EZFP_AMOUNT_CONTROL = EZFP_AMOUNT_CONTROL
+app.state.config.ALIPAY_SERVER_URL = ALIPAY_SERVER_URL
+app.state.config.ALIPAY_APP_ID = ALIPAY_APP_ID
+app.state.config.ALIPAY_APP_PRIVATE_KEY = ALIPAY_APP_PRIVATE_KEY
+app.state.config.ALIPAY_ALIPAY_PUBLIC_KEY = ALIPAY_ALIPAY_PUBLIC_KEY
+app.state.config.ALIPAY_AMOUNT_CONTROL = ALIPAY_AMOUNT_CONTROL
+app.state.config.ALIPAY_CALLBACK_HOST = ALIPAY_CALLBACK_HOST
+app.state.config.ALIPAY_PRODUCT_CODE = ALIPAY_PRODUCT_CODE
+
+########################################
 #
 # WEBUI
 #
@@ -1517,6 +1595,8 @@ app.include_router(configs.router, prefix="/api/v1/configs", tags=["configs"])
 app.include_router(auths.router, prefix="/api/v1/auths", tags=["auths"])
 app.include_router(users.router, prefix="/api/v1/users", tags=["users"])
 
+app.include_router(credit.router, prefix="/api/v1/credit", tags=["credit"])
+
 
 app.include_router(channels.router, prefix="/api/v1/channels", tags=["channels"])
 app.include_router(chats.router, prefix="/api/v1/chats", tags=["chats"])
@@ -1663,6 +1743,12 @@ async def chat_completion(
     form_data: dict,
     user=Depends(get_verified_user),
 ):
+    check_credit_by_user_id(user_id=user.id, form_data=form_data)
+
+    log.info(f"[DEBUG] chat_completion called, original stream={form_data.get('stream')}")
+    # Debug: Log reasoning_effort from frontend
+    if form_data.get("reasoning_effort"):
+        log.info(f"[DEBUG] reasoning_effort from frontend: {form_data.get('reasoning_effort')}")
     if not request.app.state.MODELS:
         await get_all_models(request, user=user)
 
@@ -1824,6 +1910,11 @@ async def chat_completion(
 
     async def process_chat(request, form_data, user, metadata, model):
         try:
+            form_data["metadata"]["features_for_credit"] = form_data["metadata"][
+                "features"
+            ]
+
+            log.info(f"[DEBUG PROCESS_CHAT] Starting process_chat for model: {model.get('id', 'unknown')}")
             form_data, metadata, events = await process_chat_payload(
                 request, form_data, user, metadata, model
             )

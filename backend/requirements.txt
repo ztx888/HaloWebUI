@@ -154,3 +154,9 @@ opentelemetry-instrumentation-requests==0.60b1
 opentelemetry-instrumentation-logging==0.60b1
 opentelemetry-instrumentation-httpx==0.60b1
 opentelemetry-instrumentation-aiohttp-client==0.60b1
+
+# Alipay
+alipay-sdk-python==3.7.796
+
+# Credit system
+jsonpath-ng==1.7.0

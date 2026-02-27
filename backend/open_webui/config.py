@@ -1766,6 +1766,28 @@ except Exception as e:
 
 WEBUI_BANNERS = PersistentConfig("WEBUI_BANNERS", "ui.banners", banners)
 
+############################
+# Splash Notification
+############################
+
+SPLASH_NOTIFICATION_ENABLED = PersistentConfig(
+    "SPLASH_NOTIFICATION_ENABLED",
+    "ui.splash_notification.enabled",
+    os.environ.get("SPLASH_NOTIFICATION_ENABLED", "false").lower() == "true",
+)
+
+SPLASH_NOTIFICATION_TITLE = PersistentConfig(
+    "SPLASH_NOTIFICATION_TITLE",
+    "ui.splash_notification.title",
+    os.environ.get("SPLASH_NOTIFICATION_TITLE", "公告通知"),
+)
+
+SPLASH_NOTIFICATION_CONTENT = PersistentConfig(
+    "SPLASH_NOTIFICATION_CONTENT",
+    "ui.splash_notification.content",
+    os.environ.get("SPLASH_NOTIFICATION_CONTENT", ""),
+)
+
 
 SHOW_ADMIN_DETAILS = PersistentConfig(
     "SHOW_ADMIN_DETAILS",
@@ -4129,4 +4151,177 @@ LDAP_ATTRIBUTE_FOR_GROUPS = PersistentConfig(
     "LDAP_ATTRIBUTE_FOR_GROUPS",
     "ldap.server.attribute_for_groups",
     os.environ.get("LDAP_ATTRIBUTE_FOR_GROUPS", "memberOf"),
+)
+
+####################################
+# Credit and Usage
+####################################
+
+
+CREDIT_NO_CHARGE_EMPTY_RESPONSE = PersistentConfig(
+    "CREDIT_NO_CHARGE_EMPTY_RESPONSE",
+    "credit.no_charge_empty_response",
+    os.environ.get("CREDIT_NO_CHARGE_EMPTY_RESPONSE", "True").lower() == "true",
+)
+
+CREDIT_NO_CREDIT_MSG = PersistentConfig(
+    "CREDIT_NO_CREDIT_MSG",
+    "credit.no_credit_msg",
+    os.environ.get("CREDIT_NO_CREDIT_MSG", "余额不足，请前往 设置-积分 充值"),
+)
+
+CREDIT_EXCHANGE_RATIO = PersistentConfig(
+    "CREDIT_EXCHANGE_RATIO",
+    "credit.exchange.ratio",
+    os.environ.get("CREDIT_EXCHANGE_RATIO", "1"),
+)
+
+CREDIT_DEFAULT_CREDIT = PersistentConfig(
+    "CREDIT_DEFAULT_CREDIT",
+    "credit.default_credit",
+    os.environ.get("CREDIT_DEFAULT_CREDIT", "0"),
+)
+
+USAGE_CALCULATE_MODEL_PREFIX_TO_REMOVE = PersistentConfig(
+    "USAGE_CALCULATE_MODEL_PREFIX_TO_REMOVE",
+    "credit.calculate.model_prefix_to_remove",
+    os.environ.get("USAGE_CALCULATE_MODEL_PREFIX_TO_REMOVE", ""),
+)
+
+USAGE_DEFAULT_ENCODING_MODEL = PersistentConfig(
+    "USAGE_DEFAULT_ENCODING_MODEL",
+    "credit.calculate.encoding.default_model",
+    os.environ.get("USAGE_DEFAULT_ENCODING_MODEL", "gpt-4o"),
+)
+
+USAGE_CALCULATE_DEFAULT_REQUEST_PRICE = PersistentConfig(
+    "USAGE_CALCULATE_DEFAULT_REQUEST_PRICE",
+    "credit.calculate.default_request_price",
+    os.environ.get("USAGE_CALCULATE_DEFAULT_REQUEST_PRICE", "0"),
+)
+
+USAGE_CALCULATE_DEFAULT_TOKEN_PRICE = PersistentConfig(
+    "USAGE_CALCULATE_DEFAULT_TOKEN_PRICE",
+    "credit.calculate.default_token_price",
+    os.environ.get("USAGE_CALCULATE_DEFAULT_TOKEN_PRICE", "0"),
+)
+
+USAGE_CALCULATE_DEFAULT_EMBEDDING_PRICE = PersistentConfig(
+    "USAGE_CALCULATE_DEFAULT_EMBEDDING_PRICE",
+    "credit.calculate.default_embedding_price",
+    os.environ.get("USAGE_CALCULATE_DEFAULT_EMBEDDING_PRICE", "0"),
+)
+
+USAGE_CALCULATE_FEATURE_IMAGE_GEN_PRICE = PersistentConfig(
+    "USAGE_CALCULATE_FEATURE_IMAGE_GEN_PRICE",
+    "credit.calculate.feature.image_gen_price",
+    os.environ.get("USAGE_CALCULATE_FEATURE_IMAGE_GEN_PRICE", "0"),
+)
+
+USAGE_CALCULATE_FEATURE_CODE_EXECUTE_PRICE = PersistentConfig(
+    "USAGE_CALCULATE_FEATURE_CODE_EXECUTE_PRICE",
+    "credit.calculate.feature.code_execute_price",
+    os.environ.get("USAGE_CALCULATE_FEATURE_CODE_EXECUTE_PRICE", "0"),
+)
+
+USAGE_CALCULATE_FEATURE_WEB_SEARCH_PRICE = PersistentConfig(
+    "USAGE_CALCULATE_FEATURE_WEB_SEARCH_PRICE",
+    "credit.calculate.feature.web_search_price",
+    os.environ.get("USAGE_CALCULATE_FEATURE_WEB_SEARCH_PRICE", "0"),
+)
+
+USAGE_CALCULATE_FEATURE_TOOL_SERVER_PRICE = PersistentConfig(
+    "USAGE_CALCULATE_FEATURE_TOOL_SERVER_PRICE",
+    "credit.calculate.feature.tool_server_price",
+    os.environ.get("USAGE_CALCULATE_FEATURE_TOOL_SERVER_PRICE", "0"),
+)
+
+USAGE_CALCULATE_MINIMUM_COST = PersistentConfig(
+    "USAGE_CALCULATE_MINIMUM_COST",
+    "credit.calculate.minimum_cost",
+    os.environ.get("USAGE_CALCULATE_MINIMUM_COST", "0"),
+)
+
+USAGE_CUSTOM_PRICE_CONFIG = PersistentConfig(
+    "USAGE_CUSTOM_PRICE_CONFIG",
+    "credit.calculate.custom_price_config",
+    os.environ.get("USAGE_CUSTOM_PRICE_CONFIG", "[]"),
+)
+
+EZFP_PAY_PRIORITY = PersistentConfig(
+    "EZFP_PAY_PRIORITY",
+    "credit.ezfp.pay_priority",
+    os.environ.get("EZFP_PAY_PRIORITY", "qrcode"),
+)
+
+EZFP_ENDPOINT = PersistentConfig(
+    "EZFP_ENDPOINT",
+    "credit.ezfp.endpoint",
+    os.environ.get("EZFP_ENDPOINT", ""),
+)
+
+EZFP_PID = PersistentConfig(
+    "EZFP_PID",
+    "credit.ezfp.pid",
+    os.environ.get("EZFP_PID", ""),
+)
+
+EZFP_KEY = PersistentConfig(
+    "EZFP_KEY",
+    "credit.ezfp.key",
+    os.environ.get("EZFP_KEY", ""),
+)
+
+EZFP_CALLBACK_HOST = PersistentConfig(
+    "EZFP_CALLBACK_HOST",
+    "credit.ezfp.callback_host",
+    os.environ.get("EZFP_CALLBACK_HOST", ""),
+)
+
+EZFP_AMOUNT_CONTROL = PersistentConfig(
+    "EZFP_AMOUNT_CONTROL",
+    "credit.ezfp.amount_control",
+    os.environ.get("EZFP_AMOUNT_CONTROL", ""),
+)
+
+ALIPAY_SERVER_URL = PersistentConfig(
+    "ALIPAY_SERVER_URL",
+    "credit.alipay.server_url",
+    os.environ.get("ALIPAY_SERVER_URL", "https://openapi.alipay.com/gateway.do"),
+)
+
+ALIPAY_APP_ID = PersistentConfig(
+    "ALIPAY_APP_ID",
+    "credit.alipay.app_id",
+    os.environ.get("ALIPAY_APP_ID", ""),
+)
+
+ALIPAY_APP_PRIVATE_KEY = PersistentConfig(
+    "ALIPAY_APP_PRIVATE_KEY",
+    "credit.alipay.app_private_key",
+    os.environ.get("ALIPAY_APP_PRIVATE_KEY", ""),
+)
+
+ALIPAY_ALIPAY_PUBLIC_KEY = PersistentConfig(
+    "ALIPAY_ALIPAY_PUBLIC_KEY",
+    "credit.alipay.alipay_public_key",
+    os.environ.get("ALIPAY_ALIPAY_PUBLIC_KEY", ""),
+)
+
+ALIPAY_CALLBACK_HOST = PersistentConfig(
+    "ALIPAY_CALLBACK_HOST",
+    "credit.alipay.callback_host",
+    os.environ.get("ALIPAY_CALLBACK_HOST", ""),
+)
+
+ALIPAY_AMOUNT_CONTROL = PersistentConfig(
+    "ALIPAY_AMOUNT_CONTROL",
+    "credit.alipay.amount_control",
+    os.environ.get("ALIPAY_AMOUNT_CONTROL", ""),
+)
+
+ALIPAY_PRODUCT_CODE = PersistentConfig(
+    "ALIPAY_PRODUCT_CODE",
+    "credit.alipay.product_code",
+    os.environ.get("ALIPAY_PRODUCT_CODE", ""),
 )

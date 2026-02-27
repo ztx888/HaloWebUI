@@ -53,6 +53,11 @@ from open_webui.config import (
 
 log = logging.getLogger(__name__)
 
+try:
+    from open_webui.utils.credit.usage import CreditDeduct
+except ImportError:
+    CreditDeduct = None
+
 
 from typing import Any
 
@@ -630,6 +635,27 @@ async def agenerate_openai_batch_embeddings(
             ) as r:
                 r.raise_for_status()
                 data = await r.json()
+
+                if CreditDeduct and user:
+                    with CreditDeduct(
+                        user=user,
+                        model_id=model,
+                        body={
+                            "messages": [
+                                {"role": "user", "content": form_data["input"]}
+                            ]
+                        },
+                        is_stream=False,
+                        is_embedding=True,
+                    ) as credit_deduct:
+                        if "usage" in data:
+                            credit_deduct.is_official_usage = True
+                            prompt_tokens = data["usage"]["prompt_tokens"]
+                            credit_deduct.usage.prompt_tokens = prompt_tokens
+                            credit_deduct.usage.total_tokens = prompt_tokens
+                        else:
+                            credit_deduct.run(form_data["input"])
+
                 if "data" in data:
                     return [item["embedding"] for item in data["data"]]
                 else:
@@ -724,6 +750,24 @@ async def agenerate_azure_openai_batch_embeddings(
             ) as r:
                 r.raise_for_status()
                 data = await r.json()
+
+                if CreditDeduct and user:
+                    input_text = str(form_data["input"])
+                    with CreditDeduct(
+                        user=user,
+                        model_id=model,
+                        body={"messages": [{"role": "user", "content": input_text}]},
+                        is_stream=False,
+                        is_embedding=True,
+                    ) as credit_deduct:
+                        if "usage" in data:
+                            credit_deduct.is_official_usage = True
+                            prompt_tokens = data["usage"]["prompt_tokens"]
+                            credit_deduct.usage.prompt_tokens = prompt_tokens
+                            credit_deduct.usage.total_tokens = prompt_tokens
+                        else:
+                            credit_deduct.run(input_text)
+
                 if "data" in data:
                     return [item["embedding"] for item in data["data"]]
                 else:
@@ -807,6 +851,18 @@ async def agenerate_ollama_batch_embeddings(
             ) as r:
                 r.raise_for_status()
                 data = await r.json()
+
+                if CreditDeduct and user:
+                    input_text = str(form_data["input"])
+                    with CreditDeduct(
+                        user=user,
+                        model_id=model,
+                        body={"messages": [{"role": "user", "content": input_text}]},
+                        is_stream=False,
+                        is_embedding=True,
+                    ) as credit_deduct:
+                        credit_deduct.run(input_text)
+
                 if "embeddings" in data:
                     return data["embeddings"]
                 else:

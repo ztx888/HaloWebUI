@@ -49,6 +49,7 @@ from open_webui.utils.payload import (
     apply_model_params_to_body_openai,
     apply_system_prompt_to_body,
 )
+from open_webui.utils.credit.usage import CreditDeduct
 
 logging.basicConfig(stream=sys.stdout, level=GLOBAL_LOG_LEVEL)
 log = logging.getLogger(__name__)
@@ -300,11 +301,31 @@ async def generate_function_chat_completion(
 
                 # Directly return if the response is a StreamingResponse
                 if isinstance(res, StreamingResponse):
-                    async for data in res.body_iterator:
-                        yield data
+                    with CreditDeduct(
+                        user=user,
+                        model_id=model_id,
+                        body=form_data,
+                        is_stream=True,
+                    ) as credit_deduct:
+
+                        async for data in res.body_iterator:
+                            credit_deduct.run(data)
+                            yield data
+
+                        yield credit_deduct.usage_message
+
                     return
+
                 if isinstance(res, dict):
-                    yield f"data: {json.dumps(res)}\n\n"
+                    with CreditDeduct(
+                        user=user,
+                        model_id=model_id,
+                        body=form_data,
+                        is_stream=False,
+                    ) as credit_deduct:
+                        credit_deduct.run(res)
+                        res = credit_deduct.add_usage_to_resp(res)
+                        yield f"data: {json.dumps(res)}\n\n"
                     return
 
             except Exception as e:
@@ -312,25 +333,41 @@ async def generate_function_chat_completion(
                 yield f"data: {json.dumps({'error': {'detail':str(e)}})}\n\n"
                 return
 
-            if isinstance(res, str):
-                message = openai_chat_chunk_message_template(form_data["model"], res)
-                yield f"data: {json.dumps(message)}\n\n"
+            with CreditDeduct(
+                user=user,
+                model_id=model_id,
+                body=form_data,
+                is_stream=True,
+            ) as credit_deduct:
 
-            if isinstance(res, Iterator):
-                for line in res:
-                    yield process_line(form_data, line)
+                if isinstance(res, str):
+                    message = openai_chat_chunk_message_template(
+                        form_data["model"], res
+                    )
+                    credit_deduct.run(message)
+                    yield f"data: {json.dumps(message)}\n\n"
 
-            if isinstance(res, AsyncGenerator):
-                async for line in res:
-                    yield process_line(form_data, line)
+                if isinstance(res, Iterator):
+                    for line in res:
+                        line = process_line(form_data, line)
+                        credit_deduct.run(line)
+                        yield line
 
-            if isinstance(res, str) or isinstance(res, Generator):
-                finish_message = openai_chat_chunk_message_template(
-                    form_data["model"], ""
-                )
-                finish_message["choices"][0]["finish_reason"] = "stop"
-                yield f"data: {json.dumps(finish_message)}\n\n"
-                yield "data: [DONE]"
+                if isinstance(res, AsyncGenerator):
+                    async for line in res:
+                        line = process_line(form_data, line)
+                        credit_deduct.run(line)
+                        yield line
+
+                if isinstance(res, str) or isinstance(res, Generator):
+                    finish_message = openai_chat_chunk_message_template(
+                        form_data["model"], ""
+                    )
+                    finish_message["choices"][0]["finish_reason"] = "stop"
+                    yield f"data: {json.dumps(finish_message)}\n\n"
+                    yield "data: [DONE]"
+
+                yield credit_deduct.usage_message
 
         return StreamingResponse(stream_content(), media_type="text/event-stream")
     else:
@@ -341,10 +378,39 @@ async def generate_function_chat_completion(
             log.error(f"Error: {e}")
             return {"error": {"detail": str(e)}}
 
-        if isinstance(res, StreamingResponse) or isinstance(res, dict):
-            return res
-        if isinstance(res, BaseModel):
-            return res.model_dump()
+        async def to_stream(response):
+            with CreditDeduct(
+                user=user,
+                model_id=model_id,
+                body=form_data,
+                is_stream=True,
+            ) as credit_deduct:
 
-        message = await get_message_content(res)
-        return openai_chat_completion_message_template(form_data["model"], message)
+                async for data in response.body_iterator:
+                    credit_deduct.run(data)
+                    yield data
+
+                yield credit_deduct.usage_message
+
+        if isinstance(res, StreamingResponse):
+            return StreamingResponse(to_stream(res), media_type="text/event-stream")
+
+        with CreditDeduct(
+            user=user,
+            model_id=model_id,
+            body=form_data,
+            is_stream=False,
+        ) as credit_deduct:
+            if isinstance(res, dict):
+                credit_deduct.run(res)
+                return credit_deduct.add_usage_to_resp(res)
+
+            if isinstance(res, BaseModel):
+                res = res.model_dump()
+                credit_deduct.run(res)
+                return credit_deduct.add_usage_to_resp(res)
+
+            message = await get_message_content(res)
+            res = openai_chat_completion_message_template(form_data["model"], message)
+            credit_deduct.run(res)
+            return credit_deduct.add_usage_to_resp(res)
