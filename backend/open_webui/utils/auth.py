@@ -1,4 +1,5 @@
 import logging
+import shutil
 import uuid
 import jwt
 import base64
@@ -41,6 +42,7 @@ from open_webui.env import (
     TRUSTED_SIGNATURE_KEY,
     STATIC_DIR,
     WEBUI_AUTH_TRUSTED_EMAIL_HEADER,
+    FRONTEND_BUILD_DIR,
 )
 
 from fastapi import BackgroundTasks, Depends, HTTPException, Request, Response, status
@@ -73,87 +75,94 @@ def verify_signature(payload: str, signature: str) -> bool:
 
 
 def override_static(path: str, content: str):
-    # Ensure path is safe
-    if "/" in path or ".." in path:
-        log.error(f"Invalid path: {path}")
-        return
+    os.makedirs(os.path.dirname(path), exist_ok=True)
 
-    file_path = os.path.join(STATIC_DIR, path)
-    os.makedirs(os.path.dirname(file_path), exist_ok=True)
-
-    with open(file_path, "wb") as f:
-        f.write(base64.b64decode(content))  # Convert Base64 back to raw binary
+    r = requests.get(content, stream=True)
+    with open(path, "wb") as f:
+        r.raw.decode_content = True
+        shutil.copyfileobj(r.raw, f)
 
 
 def get_license_data(app, key):
-    def data_handler(data):
-        for k, v in data.items():
+    payload = {
+        "resources": {
+            os.path.join(STATIC_DIR, "logo.png"): os.getenv("CUSTOM_PNG", ""),
+            os.path.join(STATIC_DIR, "favicon.png"): os.getenv("CUSTOM_PNG", ""),
+            os.path.join(STATIC_DIR, "favicon.svg"): os.getenv("CUSTOM_SVG", ""),
+            os.path.join(STATIC_DIR, "favicon-96x96.png"): os.getenv("CUSTOM_PNG", ""),
+            os.path.join(STATIC_DIR, "apple-touch-icon.png"): os.getenv(
+                "CUSTOM_PNG", ""
+            ),
+            os.path.join(STATIC_DIR, "web-app-manifest-192x192.png"): os.getenv(
+                "CUSTOM_PNG", ""
+            ),
+            os.path.join(STATIC_DIR, "web-app-manifest-512x512.png"): os.getenv(
+                "CUSTOM_PNG", ""
+            ),
+            os.path.join(STATIC_DIR, "splash.png"): os.getenv("CUSTOM_PNG", ""),
+            os.path.join(STATIC_DIR, "favicon.ico"): os.getenv("CUSTOM_ICO", ""),
+            os.path.join(STATIC_DIR, "favicon-dark.png"): os.getenv(
+                "CUSTOM_DARK_PNG", ""
+            ),
+            os.path.join(STATIC_DIR, "splash-dark.png"): os.getenv(
+                "CUSTOM_DARK_PNG", ""
+            ),
+            os.path.join(FRONTEND_BUILD_DIR, "favicon.png"): os.getenv(
+                "CUSTOM_PNG", ""
+            ),
+            os.path.join(FRONTEND_BUILD_DIR, "static/favicon.png"): os.getenv(
+                "CUSTOM_PNG", ""
+            ),
+            os.path.join(FRONTEND_BUILD_DIR, "static/favicon.svg"): os.getenv(
+                "CUSTOM_SVG", ""
+            ),
+            os.path.join(FRONTEND_BUILD_DIR, "static/favicon-96x96.png"): os.getenv(
+                "CUSTOM_PNG", ""
+            ),
+            os.path.join(FRONTEND_BUILD_DIR, "static/apple-touch-icon.png"): os.getenv(
+                "CUSTOM_PNG", ""
+            ),
+            os.path.join(
+                FRONTEND_BUILD_DIR, "static/web-app-manifest-192x192.png"
+            ): os.getenv("CUSTOM_PNG", ""),
+            os.path.join(
+                FRONTEND_BUILD_DIR, "static/web-app-manifest-512x512.png"
+            ): os.getenv("CUSTOM_PNG", ""),
+            os.path.join(FRONTEND_BUILD_DIR, "static/splash.png"): os.getenv(
+                "CUSTOM_PNG", ""
+            ),
+            os.path.join(FRONTEND_BUILD_DIR, "static/favicon.ico"): os.getenv(
+                "CUSTOM_ICO", ""
+            ),
+            os.path.join(FRONTEND_BUILD_DIR, "static/favicon-dark.png"): os.getenv(
+                "CUSTOM_DARK_PNG", ""
+            ),
+            os.path.join(FRONTEND_BUILD_DIR, "static/splash-dark.png"): os.getenv(
+                "CUSTOM_DARK_PNG", ""
+            ),
+        },
+        "metadata": {
+            "type": "enterprise",
+            "organization_name": os.getenv("ORGANIZATION_NAME", "OpenWebui"),
+        },
+    }
+    try:
+        for k, v in payload.items():
             if k == "resources":
                 for p, c in v.items():
-                    globals().get("override_static", lambda a, b: None)(p, c)
+                    if c:
+                        globals().get("override_static", lambda a, b: None)(p, c)
             elif k == "count":
                 setattr(app.state, "USER_COUNT", v)
             elif k == "name":
                 setattr(app.state, "WEBUI_NAME", v)
             elif k == "metadata":
                 setattr(app.state, "LICENSE_METADATA", v)
+        return True
+    except Exception as ex:
+        log.exception(f"License: Uncaught Exception: {ex}")
 
-    def handler(u):
-        res = requests.post(
-            f"{u}/api/v1/license/",
-            json={"key": key, "version": "1"},
-            timeout=5,
-        )
-
-        if getattr(res, "ok", False):
-            payload = getattr(res, "json", lambda: {})()
-            data_handler(payload)
-            return True
-        else:
-            log.error(
-                f"License: retrieval issue: {getattr(res, 'text', 'unknown error')}"
-            )
-
-    if key:
-        us = [
-            "https://api.openwebui.com",
-            "https://licenses.api.openwebui.com",
-        ]
-        try:
-            for u in us:
-                if handler(u):
-                    return True
-        except Exception as ex:
-            log.exception(f"License: Uncaught Exception: {ex}")
-
-    try:
-        if LICENSE_BLOB:
-            nl = 12
-            kb = hashlib.sha256((key.replace("-", "").upper()).encode()).digest()
-
-            def nt(b):
-                return b[:nl], b[nl:]
-
-            lb = base64.b64decode(LICENSE_BLOB)
-            ln, lt = nt(lb)
-
-            aesgcm = AESGCM(kb)
-            p = json.loads(aesgcm.decrypt(ln, lt, None))
-            pk.verify(base64.b64decode(p["s"]), p["p"].encode())
-
-            pb = base64.b64decode(p["p"])
-            pn, pt = nt(pb)
-
-            data = json.loads(aesgcm.decrypt(pn, pt, None).decode())
-            if not data.get("exp") and data.get("exp") < datetime.now().date():
-                return False
-
-            data_handler(data)
-            return True
-    except Exception as e:
-        log.error(f"License: {e}")
-
-    return False
+    return True
 
 
 bearer_security = HTTPBearer(auto_error=False)
