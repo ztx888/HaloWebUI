@@ -17,13 +17,8 @@
 				title = data.title || '公告通知';
 				content = data.content;
 				renderedHtml = markdownToHtml(content);
-
-				// Check if user has already seen this notification (hash-based)
-				const hash = simpleHash(content);
-				const seenHash = localStorage.getItem('splash_notification_seen');
-				if (seenHash !== hash) {
-					show = true;
-				}
+				// Always show notification on page load
+				show = true;
 			}
 		} catch (e) {
 			console.log('Splash notification not available:', e);
@@ -31,22 +26,10 @@
 	});
 
 	const close = () => {
-		// Save hash so user doesn't see same notification again
-		const hash = simpleHash(content);
-		localStorage.setItem('splash_notification_seen', hash);
 		show = false;
 		dispatch('close');
 	};
 
-	function simpleHash(str: string): string {
-		let hash = 0;
-		for (let i = 0; i < str.length; i++) {
-			const char = str.charCodeAt(i);
-			hash = ((hash << 5) - hash) + char;
-			hash = hash & hash; // Convert to 32bit integer
-		}
-		return hash.toString(36);
-	}
 
 	function markdownToHtml(md: string): string {
 		if (!md) return '';
