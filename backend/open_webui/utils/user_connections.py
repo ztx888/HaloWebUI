@@ -85,13 +85,6 @@ def _has_provider_values(cfg: Optional[dict], urls_key: str, keys_key: Optional[
     return False
 
 
-def _should_seed_provider(existing: Optional[dict], urls_key: str, keys_key: Optional[str], configs_key: str) -> bool:
-    """
-    Seed when the existing provider is missing or effectively empty.
-    """
-    return not _has_provider_values(existing, urls_key, keys_key, configs_key)
-
-
 def maybe_migrate_user_connections(request, user: UserModel) -> UserModel:
     """
     Ensure user.settings.ui.connections exists and migrate legacy data into it.
@@ -111,12 +104,7 @@ def maybe_migrate_user_connections(request, user: UserModel) -> UserModel:
     # 1) Migrate legacy per-user OpenAI-compatible directConnections -> ui.connections.openai
     legacy_direct = ui.get("directConnections")
     if isinstance(legacy_direct, dict):
-        if _should_seed_provider(
-            connections.get("openai"),
-            "OPENAI_API_BASE_URLS",
-            "OPENAI_API_KEYS",
-            "OPENAI_API_CONFIGS",
-        ) and _has_provider_values(
+        if "openai" not in connections and _has_provider_values(
             legacy_direct, "OPENAI_API_BASE_URLS", "OPENAI_API_KEYS", "OPENAI_API_CONFIGS"
         ):
             connections["openai"] = deepcopy(legacy_direct)
@@ -148,42 +136,24 @@ def maybe_migrate_user_connections(request, user: UserModel) -> UserModel:
             }
 
             # Only seed missing keys. If openai already came from legacy_direct, keep it.
-            if _should_seed_provider(
-                connections.get("openai"),
-                "OPENAI_API_BASE_URLS",
-                "OPENAI_API_KEYS",
-                "OPENAI_API_CONFIGS",
-            ) and _has_provider_values(
+            if "openai" not in connections and _has_provider_values(
                 global_openai, "OPENAI_API_BASE_URLS", "OPENAI_API_KEYS", "OPENAI_API_CONFIGS"
             ):
                 connections["openai"] = global_openai
                 changed = True
-            if _should_seed_provider(
-                connections.get("gemini"),
-                "GEMINI_API_BASE_URLS",
-                "GEMINI_API_KEYS",
-                "GEMINI_API_CONFIGS",
-            ) and _has_provider_values(
+            if "gemini" not in connections and _has_provider_values(
                 global_gemini, "GEMINI_API_BASE_URLS", "GEMINI_API_KEYS", "GEMINI_API_CONFIGS"
             ):
                 connections["gemini"] = global_gemini
                 changed = True
-            if _should_seed_provider(
-                connections.get("anthropic"),
-                "ANTHROPIC_API_BASE_URLS",
-                "ANTHROPIC_API_KEYS",
-                "ANTHROPIC_API_CONFIGS",
-            ) and _has_provider_values(
+            if "anthropic" not in connections and _has_provider_values(
                 global_anthropic, "ANTHROPIC_API_BASE_URLS", "ANTHROPIC_API_KEYS", "ANTHROPIC_API_CONFIGS"
             ):
                 connections["anthropic"] = global_anthropic
                 changed = True
-            if _should_seed_provider(
-                connections.get("ollama"),
-                "OLLAMA_BASE_URLS",
-                None,
-                "OLLAMA_API_CONFIGS",
-            ) and _has_provider_values(global_ollama, "OLLAMA_BASE_URLS", None, "OLLAMA_API_CONFIGS"):
+            if "ollama" not in connections and _has_provider_values(
+                global_ollama, "OLLAMA_BASE_URLS", None, "OLLAMA_API_CONFIGS"
+            ):
                 connections["ollama"] = global_ollama
                 changed = True
 

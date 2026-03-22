@@ -17,7 +17,7 @@
 	import SourceToken from './SourceToken.svelte';
 
 	export let id: string;
-	export let tokens: Token[];
+	export let tokens: Token[] = [];
 	export let onSourceClick: Function = () => {};
 
 	// Streaming context for word-level fade animation
@@ -33,9 +33,70 @@
 			return text.match(/[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff]|\S+|\s+/g) || [text];
 		}
 	}
+
+	type InlineRenderableToken = Token & {
+		raw?: string;
+		text?: string;
+	};
+
+	const SVG_OPEN_TAG_RE = /^<svg(?:\s|>)/i;
+	const SVG_CLOSE_TAG_RE = /<\/svg>/i;
+
+	function getTokenContent(token: InlineRenderableToken): string {
+		const value = token.text ?? token.raw ?? '';
+		return typeof value === 'string' ? value : '';
+	}
+
+	function isSvgFragmentToken(token: Token): boolean {
+		return token.type === 'html' || token.type === 'text' || token.type === 'escape';
+	}
+
+	// Marked may split inline SVG into <svg> + child tags + </svg> tokens inside a paragraph.
+	// Rendering those pieces one by one breaks the DOM tree and leaves an empty-sized svg shell.
+	function mergeInlineSvgTokens(tokens: Token[] = []): InlineRenderableToken[] {
+		const merged: InlineRenderableToken[] = [];
+
+		for (let i = 0; i < tokens.length; i += 1) {
+			const token = tokens[i] as InlineRenderableToken;
+			const content = getTokenContent(token);
+
+			if (token.type === 'html' && SVG_OPEN_TAG_RE.test(content)) {
+				const parts = [content];
+				let foundClose = SVG_CLOSE_TAG_RE.test(content);
+				let j = i + 1;
+
+				while (j < tokens.length && !foundClose && isSvgFragmentToken(tokens[j])) {
+					const next = tokens[j] as InlineRenderableToken;
+					const nextContent = getTokenContent(next);
+					parts.push(nextContent);
+					foundClose = SVG_CLOSE_TAG_RE.test(nextContent);
+					j += 1;
+				}
+
+				if (foundClose) {
+					const svgContent = parts.join('');
+					merged.push({
+						...token,
+						type: 'html',
+						raw: svgContent,
+						text: svgContent
+					});
+					i = j - 1;
+					continue;
+				}
+			}
+
+			merged.push(token);
+		}
+
+		return merged;
+	}
+
+	let renderTokens: InlineRenderableToken[] = [];
+	$: renderTokens = mergeInlineSvgTokens(tokens);
 </script>
 
-{#each tokens as token}
+{#each renderTokens as token}
 	{#if token.type === 'escape'}
 		{unescapeHtml(token.text)}
 	{:else if token.type === 'html'}
