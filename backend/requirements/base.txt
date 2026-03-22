@@ -55,6 +55,7 @@ rank-bm25==0.2.2
 PyJWT[crypto]==2.10.1
 cryptography>=43.0.0
 authlib==1.4.1
+itsdangerous==2.2.0
 
 youtube-transcript-api==1.0.3
 pydub

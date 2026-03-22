@@ -47,7 +47,6 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
-from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import Response, StreamingResponse
 
 
@@ -1819,6 +1818,14 @@ async def get_app_changelog():
 
 # SessionMiddleware is used by authlib for oauth
 if len(OAUTH_PROVIDERS) > 0:
+    try:
+        from starlette.middleware.sessions import SessionMiddleware
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "OAuth is configured but the required dependency 'itsdangerous' is not installed. "
+            "Install it and rebuild the image."
+        ) from exc
+
     app.add_middleware(
         SessionMiddleware,
         secret_key=WEBUI_SECRET_KEY,
