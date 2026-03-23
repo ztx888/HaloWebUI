@@ -47,7 +47,6 @@
 	import ChatItem from './Sidebar/ChatItem.svelte';
 	import Spinner from '../common/Spinner.svelte';
 	import Loader from '../common/Loader.svelte';
-	import LetterAvatar from '../common/LetterAvatar.svelte';
 	import AddFilesPlaceholder from '../AddFilesPlaceholder.svelte';
 	import SearchInput from './Sidebar/SearchInput.svelte';
 	import Folder from '../common/Folder.svelte';
@@ -1105,7 +1104,12 @@
 							}}
 						>
 							<div class="{avatarContainerClass} {$showSidebar || $mobile ? 'mr-3' : ''}">
-								<LetterAvatar name={$user?.name ?? ''} size="w-full h-full" className="rounded-full" />
+								<img
+									src={$user?.profile_image_url || '/user.png'}
+									class="w-full h-full object-cover rounded-full"
+									alt="User profile"
+									draggable="false"
+								/>
 							</div>
 							{#if $showSidebar || $mobile}
 								<div class="flex-1 text-left min-w-0">
