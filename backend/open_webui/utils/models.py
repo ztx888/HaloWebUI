@@ -314,16 +314,13 @@ async def get_all_models(request, user: UserModel = None):
         if owner_id not in owner_base_models_cache:
             owner_base_models_cache[owner_id] = await _owner_base_models_by_user_id(owner_id)
 
-        owner_base_model = _find_model_like(owner_base_models_cache.get(owner_id, []), custom_model.id)
+        owner_base_model = _find_model_like(
+            owner_base_models_cache.get(owner_id, []), custom_model.id
+        )
         if not owner_base_model:
-            # Fallback: still expose it, but routing may fail if we can't infer provider metadata.
-            owner_base_model = {
-                "id": custom_model.id,
-                "name": custom_model.name,
-                "object": "model",
-                "created": custom_model.created_at,
-                "owned_by": "openai",
-            }
+            # Skip orphaned overrides: after upgrades or connection changes, the DB can still
+            # contain legacy override rows for base models that are no longer available.
+            continue
 
         injected = copy.deepcopy(owner_base_model)
         injected["id"] = custom_model.id
@@ -357,10 +354,14 @@ async def get_all_models(request, user: UserModel = None):
                 owner_base_models_cache[owner_id] = await _owner_base_models_by_user_id(owner_id)
             base_like = _find_model_like(owner_base_models_cache.get(owner_id, []), custom_model.base_model_id)
 
-        if base_like:
-            owned_by = base_like.get("owned_by", owned_by)
-            if "pipe" in base_like:
-                pipe = base_like.get("pipe")
+        if not base_like:
+            # Skip orphaned preset models whose upstream/base model no longer exists for the
+            # owner. Leaving them in the chat model list causes stale, unusable entries.
+            continue
+
+        owned_by = base_like.get("owned_by", owned_by)
+        if "pipe" in base_like:
+            pipe = base_like.get("pipe")
 
         if custom_model.meta:
             meta = custom_model.meta.model_dump()

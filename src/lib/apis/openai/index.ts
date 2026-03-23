@@ -6,6 +6,8 @@ type OpenAIConnectionConfig = Record<string, any> & {
 	force_mode?: boolean;
 };
 
+type OpenAIVerifyPurpose = 'connection' | 'models';
+
 const isForceModeConnection = (
 	url: string,
 	config?: OpenAIConnectionConfig
@@ -13,6 +15,69 @@ const isForceModeConnection = (
 	const normalizedUrl = (url || '').trim().replace(/\/+$/, '');
 	return Boolean(config?.force_mode) || normalizedUrl.endsWith(OPENAI_CHAT_COMPLETIONS_SUFFIX);
 };
+
+const isDashScopeCompatibleConnection = (url: string) => {
+	try {
+		const parsed = new URL(url.trim());
+		const host = parsed.hostname.toLowerCase();
+		const path = parsed.pathname.replace(/\/+$/, '');
+
+		if (host === 'coding.dashscope.aliyuncs.com') {
+			return path === '/v1';
+		}
+
+		return (
+			(host === 'dashscope.aliyuncs.com' ||
+				(host.startsWith('dashscope-') && host.endsWith('.aliyuncs.com'))) &&
+			path === '/compatible-mode/v1'
+		);
+	} catch {
+		return false;
+	}
+};
+
+const looksLikeModelsEndpointUnsupported = (status: number, body: unknown) => {
+	if (status !== 404 && status !== 405) return false;
+
+	const text =
+		typeof body === 'string'
+			? body.trim().toLowerCase()
+			: JSON.stringify(body ?? '').toLowerCase().trim();
+
+	if (!text) return true;
+	if (text.startsWith('<!doctype html') || text.startsWith('<html')) return true;
+
+	return (
+		text.includes('endpoint not found') ||
+		text.includes('route not found') ||
+		text.includes('resource not found') ||
+		text.includes('404 page not found') ||
+		(text.includes('models') &&
+			['not found', 'unsupported', 'not support', 'unknown', 'no route'].some((term) =>
+				text.includes(term)
+			))
+	);
+};
+
+const buildDashScopeVerifyFallback = (purpose: OpenAIVerifyPurpose) =>
+	purpose === 'models'
+		? {
+				object: 'list',
+				data: [],
+				_openwebui: {
+					manual_model_ids_required: true,
+					reason: 'models_endpoint_unsupported',
+					provider: 'dashscope'
+				}
+			}
+		: {
+				ok: true,
+				_openwebui: {
+					verification_succeeded: true,
+					models_endpoint_supported: false,
+					provider: 'dashscope'
+				}
+			};
 
 const getOpenAIModelsEndpoint = (
 	url: string,
@@ -308,6 +373,7 @@ export const verifyOpenAIConnection = async (
 				url: string;
 				key: string;
 				config?: OpenAIConnectionConfig;
+				purpose?: OpenAIVerifyPurpose;
 		  } = 'https://api.openai.com/v1',
 	keyOrDirect: string | boolean = '',
 	direct: boolean = false
@@ -320,6 +386,8 @@ export const verifyOpenAIConnection = async (
 				: ''
 			: urlOrConnection.key;
 	const config = typeof urlOrConnection === 'string' ? undefined : urlOrConnection.config;
+	const purpose =
+		typeof urlOrConnection === 'string' ? 'connection' : (urlOrConnection.purpose ?? 'connection');
 	const isDirect = typeof keyOrDirect === 'boolean' ? keyOrDirect : direct;
 
 	if (!url) {
@@ -339,7 +407,27 @@ export const verifyOpenAIConnection = async (
 			}
 		})
 			.then(async (res) => {
-				if (!res.ok) throw await res.json();
+				if (!res.ok) {
+					let upstreamError: any = null;
+					try {
+						upstreamError = await res.json();
+					} catch {
+						try {
+							upstreamError = await res.text();
+						} catch {
+							upstreamError = null;
+						}
+					}
+
+					if (
+						isDashScopeCompatibleConnection(url) &&
+						looksLikeModelsEndpointUnsupported(res.status, upstreamError)
+					) {
+						return buildDashScopeVerifyFallback(purpose);
+					}
+
+					throw upstreamError;
+				}
 				return res.json();
 			})
 			.catch((err) => {
@@ -361,7 +449,8 @@ export const verifyOpenAIConnection = async (
 			body: JSON.stringify({
 				url,
 				key,
-				config
+				config,
+				purpose
 			})
 		})
 			.then(async (res) => {

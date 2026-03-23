@@ -409,6 +409,7 @@
 			{
 				url: verifyUrl,
 				key,
+				purpose: 'connection',
 				config: {
 					force_mode: isForceMode,
 					auth_type,

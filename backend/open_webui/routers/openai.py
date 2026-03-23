@@ -429,6 +429,129 @@ async def _safe_read_upstream_body(response: aiohttp.ClientResponse):
             return None
 
 
+def _extract_upstream_error_detail(status: int, body) -> str:
+    if isinstance(body, dict):
+        error = body.get("error")
+        if error is not None:
+            return f"External Error: {error}"
+
+        for key in ("detail", "message"):
+            value = body.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+    text = _truncate_text(_stringify_upstream_body(body), 1200).strip()
+    return text if text else f"HTTP Error: {status}"
+
+
+def _coerce_model_list_entry(item) -> Optional[dict]:
+    if isinstance(item, str) and item.strip():
+        return {"id": item.strip(), "object": "model"}
+
+    if isinstance(item, dict):
+        model_id = item.get("id") or item.get("name") or item.get("model")
+        if model_id:
+            normalized = dict(item)
+            normalized.setdefault("id", model_id)
+            normalized.setdefault("object", "model")
+            return normalized
+
+    return None
+
+
+def _normalize_openai_models_response(body) -> Optional[dict]:
+    if isinstance(body, dict):
+        data = body.get("data")
+        if isinstance(data, list):
+            return body
+
+        models = body.get("models")
+        if isinstance(models, list):
+            normalized = [
+                entry
+                for item in models
+                if (entry := _coerce_model_list_entry(item)) is not None
+            ]
+            result = dict(body)
+            result.setdefault("object", "list")
+            result["data"] = normalized
+            return result
+
+    if isinstance(body, list):
+        normalized = [
+            entry
+            for item in body
+            if (entry := _coerce_model_list_entry(item)) is not None
+        ]
+        return {"object": "list", "data": normalized}
+
+    return None
+
+
+def _is_dashscope_compatible_connection(url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").strip().lower()
+        path = (parsed.path or "").rstrip("/")
+    except Exception:
+        host = ""
+        path = ""
+
+    if host == "coding.dashscope.aliyuncs.com":
+        return path == "/v1"
+
+    if host == "dashscope.aliyuncs.com" or (
+        host.startswith("dashscope-") and host.endswith(".aliyuncs.com")
+    ):
+        return path == "/compatible-mode/v1"
+
+    return False
+
+
+def _looks_like_models_listing_unsupported(status: int, body) -> bool:
+    if status not in (404, 405):
+        return False
+
+    text = _stringify_upstream_body(body).lower().strip()
+    if not text:
+        return True
+
+    if text.startswith("<!doctype html") or text.startswith("<html"):
+        return True
+
+    if any(
+        term in text
+        for term in (
+            "endpoint not found",
+            "route not found",
+            "resource not found",
+            "404 page not found",
+        )
+    ):
+        return True
+
+    if "models" in text and any(
+        term in text for term in ("not found", "unsupported", "not support", "unknown", "no route")
+    ):
+        return True
+
+    return False
+
+
+def _build_manual_model_discovery_response(
+    provider: Optional[str] = None,
+) -> dict:
+    return {
+        "object": "list",
+        "data": [],
+        "_openwebui": {
+            "manual_model_ids_required": True,
+            "reason": "models_endpoint_unsupported",
+            **({"provider": provider} if provider else {}),
+        },
+    }
+
+
 def _looks_like_responses_endpoint_unsupported(status: int, body_text: str) -> bool:
     if status in (404, 405):
         return True
@@ -1145,6 +1268,7 @@ class ConnectionVerificationForm(BaseModel):
     url: str
     key: str
     config: Optional[dict] = None
+    purpose: Literal["connection", "models"] = "connection"
 
 
 class ResponsesVerificationForm(BaseModel):
@@ -1161,40 +1285,56 @@ async def verify_connection(
     url = form_data.url
     key = form_data.key
     api_config = form_data.config or {}
+    purpose = form_data.purpose or "connection"
     models_url = _get_openai_models_url(url, api_config)
+    headers = _build_upstream_headers(url, key, api_config, user=user)
 
     async with aiohttp.ClientSession(
-        timeout=aiohttp.ClientTimeout(total=AIOHTTP_CLIENT_TIMEOUT_MODEL_LIST)
+        timeout=aiohttp.ClientTimeout(total=AIOHTTP_CLIENT_TIMEOUT_MODEL_LIST),
+        trust_env=True,
     ) as session:
         try:
-            async with session.get(
-                models_url,
-                headers={
-                    "Authorization": f"Bearer {key}",
-                    "Content-Type": "application/json",
-                    **(
-                        {
-                            "X-OpenWebUI-User-Name": user.name,
-                            "X-OpenWebUI-User-Id": user.id,
-                            "X-OpenWebUI-User-Email": user.email,
-                            "X-OpenWebUI-User-Role": user.role,
+            async with session.get(models_url, headers=headers) as r:
+                response_body = await _safe_read_upstream_body(r)
+
+                if r.status == 200:
+                    normalized_response = _normalize_openai_models_response(response_body)
+                    if normalized_response is not None:
+                        return normalized_response
+
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Invalid response from upstream /models endpoint",
+                    )
+
+                if _looks_like_models_listing_unsupported(r.status, response_body):
+                    if _is_dashscope_compatible_connection(url):
+                        log.info(
+                            "Upstream %s does not expose /models; using DashScope-compatible fallback for %s",
+                            models_url,
+                            purpose,
+                        )
+                        if purpose == "models":
+                            return _build_manual_model_discovery_response(
+                                provider="dashscope"
+                            )
+
+                        return {
+                            "ok": True,
+                            "_openwebui": {
+                                "verification_succeeded": True,
+                                "provider": "dashscope",
+                                "models_endpoint_supported": False,
+                            },
                         }
-                        if ENABLE_FORWARD_USER_INFO_HEADERS
-                        else {}
-                    ),
-                },
-            ) as r:
-                if r.status != 200:
-                    # Extract response error details if available
-                    error_detail = f"HTTP Error: {r.status}"
-                    res = await r.json()
-                    if "error" in res:
-                        error_detail = f"External Error: {res['error']}"
-                    raise Exception(error_detail)
 
-                response_data = await r.json()
-                return response_data
+                raise HTTPException(
+                    status_code=400,
+                    detail=_extract_upstream_error_detail(r.status, response_body),
+                )
 
+        except HTTPException:
+            raise
         except aiohttp.ClientError as e:
             # ClientError covers all aiohttp requests issues
             log.exception(f"Client error: {str(e)}")

@@ -157,3 +157,80 @@ def test_private_admin_shared_model_stays_hidden_without_explicit_access(monkeyp
 
     assert models == []
     assert request.state.MODELS == {}
+
+
+def test_orphan_base_override_is_not_injected_into_models(monkeypatch):
+    owner = SimpleNamespace(id="admin-1", role="admin")
+
+    async def fake_get_all_base_models(_request, user=None):
+        return []
+
+    monkeypatch.setattr(models_utils, "get_all_base_models", fake_get_all_base_models)
+    monkeypatch.setattr(models_utils.Functions, "get_global_action_functions", lambda: [])
+    monkeypatch.setattr(
+        models_utils.Functions,
+        "get_functions_by_type",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        models_utils.Models,
+        "get_all_models",
+        lambda: [
+            _WorkspaceModel(
+                model_id="grok-4.1-fast",
+                user_id=owner.id,
+                name="Legacy Grok 4.1 Fast",
+                access_control=None,
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        Users,
+        "get_user_by_id",
+        lambda user_id: owner if user_id == owner.id else None,
+    )
+
+    request = _make_request()
+    models = asyncio.run(models_utils.get_all_models(request, user=owner))
+
+    assert models == []
+    assert request.state.MODELS == {}
+
+
+def test_orphan_preset_model_is_not_injected_into_models(monkeypatch):
+    owner = SimpleNamespace(id="admin-1", role="admin")
+
+    async def fake_get_all_base_models(_request, user=None):
+        return []
+
+    monkeypatch.setattr(models_utils, "get_all_base_models", fake_get_all_base_models)
+    monkeypatch.setattr(models_utils.Functions, "get_global_action_functions", lambda: [])
+    monkeypatch.setattr(
+        models_utils.Functions,
+        "get_functions_by_type",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        models_utils.Models,
+        "get_all_models",
+        lambda: [
+            _WorkspaceModel(
+                model_id="HH Grok-4.1-Fast",
+                user_id=owner.id,
+                name="HH Grok-4.1-Fast",
+                access_control=None,
+                base_model_id="grok-4.1-fast",
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        Users,
+        "get_user_by_id",
+        lambda user_id: owner if user_id == owner.id else None,
+    )
+
+    request = _make_request()
+    models = asyncio.run(models_utils.get_all_models(request, user=owner))
+
+    assert models == []
+    assert request.state.MODELS == {}

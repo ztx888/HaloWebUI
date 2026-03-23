@@ -47,6 +47,7 @@
 	let newModelId = '';
 	let loading = false;
 	let availableModels: Array<{ id: string; name?: string }> = [];
+	let serverModelListRequiresManualEntry = false;
 
 	const describeConnectionError = (error: unknown) => {
 		const { title, description } = formatConnectionErrorToast(error, (key, options) =>
@@ -106,6 +107,7 @@
 		}
 
 		loading = true;
+		serverModelListRequiresManualEntry = false;
 		try {
 			let data: any;
 
@@ -161,23 +163,39 @@
 				data = await verifyOpenAIConnection(localStorage.token, {
 					url,
 					key,
+					purpose: 'models',
 					config: {
-						force_mode
+						force_mode,
+						...(auth_type ? { auth_type } : {}),
+						...(headers ? { headers } : {})
 					}
 				});
 				availableModels = (data?.data || []).map((m: any) => ({
 					id: m.id,
-					name: m.id
+					name: m.name || m.id
 				}));
+
+				serverModelListRequiresManualEntry =
+					data?._openwebui?.manual_model_ids_required === true;
 			}
 
-			toast.success($i18n.t('Found {{count}} models', { count: availableModels.length }));
+			if (serverModelListRequiresManualEntry) {
+				toast.info(
+					$i18n.t('This provider does not expose a model list. Add model IDs manually below.'),
+					{
+						duration: 6000
+					}
+				);
+			} else {
+				toast.success($i18n.t('Found {{count}} models', { count: availableModels.length }));
+			}
 		} catch (error) {
 			toast.error($i18n.t('Failed to fetch models'), {
 				description: describeConnectionError(error),
 				duration: 6000
 			});
 			availableModels = [];
+			serverModelListRequiresManualEntry = false;
 		} finally {
 			loading = false;
 		}
@@ -460,7 +478,11 @@
 					{/each}
 				{:else if availableModels.length === 0}
 					<div class="px-4 py-8 text-center text-sm text-gray-500">
-						{$i18n.t('Click refresh button to fetch models from server')}
+						{#if serverModelListRequiresManualEntry}
+							{$i18n.t('This provider does not expose a model list. Add model IDs manually below.')}
+						{:else}
+							{$i18n.t('Click refresh button to fetch models from server')}
+						{/if}
 					</div>
 				{:else}
 					<div class="px-4 py-8 text-center text-sm text-gray-500">
