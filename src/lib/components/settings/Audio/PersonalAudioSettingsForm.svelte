@@ -6,6 +6,11 @@
 
 	import { user, settings, config, models } from '$lib/stores';
 	import { getVoices as _getVoices } from '$lib/apis/audio';
+	import {
+		approveKokoroConsent,
+		hasKokoroConsent,
+		KOKORO_MODEL_DOWNLOAD_MB
+	} from '$lib/utils/browser-ai-assets';
 	import { revealExpandedSection } from '$lib/utils/expanded-section-scroll';
 
 	import Switch from '$lib/components/common/Switch.svelte';
@@ -87,6 +92,8 @@
 	let sectionEl_voice: HTMLElement;
 	let initialSnapshot = null;
 	let KokoroTTSClass = null;
+	let kokoroConsentAccepted = false;
+	let lastNonKokoroEngine = '';
 
 	export let isDirty = false;
 	let lastDirtyState: boolean | null = null;
@@ -107,6 +114,10 @@
 
 	const getVoices = async () => {
 		if (TTSEngine === 'browser-kokoro') {
+			if (!kokoroConsentAccepted) {
+				voices = [];
+				return;
+			}
 			if (!TTSModel) {
 				await loadKokoro();
 			}
@@ -252,6 +263,11 @@
 	};
 
 	const saveUserAudioSettings = async () => {
+		if (TTSEngine === 'browser-kokoro' && !kokoroConsentAccepted) {
+			toast.error('请先确认下载浏览器语音模型后再启用 Kokoro.js。');
+			return;
+		}
+
 		const patch = buildUserPatch();
 
 		if (Object.keys(patch).length > 0) {
@@ -301,6 +317,7 @@
 	};
 
 	onMount(async () => {
+		kokoroConsentAccepted = hasKokoroConsent();
 		expandedSections = {
 			stt: defaultExpandedSections?.stt ?? true,
 			tts: defaultExpandedSections?.tts ?? true,
@@ -331,6 +348,10 @@
 		await tick();
 	});
 
+	$: if (TTSEngine !== 'browser-kokoro') {
+		lastNonKokoroEngine = TTSEngine;
+	}
+
 	$: if (TTSEngine && TTSEngineConfig) {
 		onTTSEngineChange();
 	}
@@ -345,6 +366,9 @@
 
 	const onTTSEngineChange = async () => {
 		if (TTSEngine === 'browser-kokoro') {
+			if (!kokoroConsentAccepted) {
+				return;
+			}
 			await loadKokoro();
 		}
 	};
@@ -483,7 +507,40 @@
 				</div>
 			</div>
 
-			{#if TTSEngine === 'browser-kokoro'}
+			{#if TTSEngine === 'browser-kokoro' && !kokoroConsentAccepted}
+				<div class="glass-item px-4 py-3 border border-amber-200/70 bg-amber-50/80 dark:border-amber-900/60 dark:bg-amber-950/20">
+					<div class="text-sm font-medium text-amber-800 dark:text-amber-200">
+						首次启用需要下载浏览器端语音模型
+					</div>
+					<div class="mt-1 text-xs leading-relaxed text-amber-700 dark:text-amber-300">
+						将下载约 {KOKORO_MODEL_DOWNLOAD_MB} MB 模型资源，仅对当前浏览器生效，下载完成后会缓存，后续一般不需要重复下载。
+					</div>
+					<div class="mt-3 flex gap-2">
+						<button
+							class="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-amber-700"
+							type="button"
+							on:click={async () => {
+								approveKokoroConsent();
+								kokoroConsentAccepted = true;
+								await loadKokoro();
+							}}
+						>
+							下载并启用
+						</button>
+						<button
+							class="rounded-lg bg-white px-3 py-1.5 text-xs font-medium text-amber-700 transition hover:bg-amber-100 dark:bg-transparent dark:text-amber-200 dark:hover:bg-amber-900/30"
+							type="button"
+							on:click={() => {
+								TTSEngine = lastNonKokoroEngine;
+							}}
+						>
+							暂不
+						</button>
+					</div>
+				</div>
+			{/if}
+
+			{#if TTSEngine === 'browser-kokoro' && kokoroConsentAccepted}
 				<div class="glass-item px-4 py-3">
 					<div class="flex items-center justify-between">
 						<div class="text-sm font-medium">{$i18n.t('Kokoro.js Dtype')}</div>
@@ -523,7 +580,7 @@
 				{$i18n.t('Set Voice')}
 			</div>
 
-			{#if TTSEngine === 'browser-kokoro'}
+			{#if TTSEngine === 'browser-kokoro' && kokoroConsentAccepted}
 				{#if TTSModel}
 					<div class="glass-item p-4">
 						<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">
@@ -779,7 +836,40 @@
 								</div>
 							</div>
 
-							{#if TTSEngine === 'browser-kokoro'}
+							{#if TTSEngine === 'browser-kokoro' && !kokoroConsentAccepted}
+								<div class="rounded-xl border border-amber-200/70 bg-amber-50/80 px-3 py-3 text-xs leading-relaxed text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-300">
+									<div class="font-medium text-amber-800 dark:text-amber-200">
+										首次启用需要下载浏览器端语音模型
+									</div>
+									<div class="mt-1">
+										将下载约 {KOKORO_MODEL_DOWNLOAD_MB} MB 模型资源，仅对当前浏览器生效，下载完成后会缓存，后续一般不需要重复下载。
+									</div>
+									<div class="mt-3 flex gap-2">
+										<button
+											class="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-amber-700"
+											type="button"
+											on:click={async () => {
+												approveKokoroConsent();
+												kokoroConsentAccepted = true;
+												await loadKokoro();
+											}}
+										>
+											下载并启用
+										</button>
+										<button
+											class="rounded-lg bg-white px-3 py-1.5 text-xs font-medium text-amber-700 transition hover:bg-amber-100 dark:bg-transparent dark:text-amber-200 dark:hover:bg-amber-900/30"
+											type="button"
+											on:click={() => {
+												TTSEngine = lastNonKokoroEngine;
+											}}
+										>
+											暂不
+										</button>
+									</div>
+								</div>
+							{/if}
+
+							{#if TTSEngine === 'browser-kokoro' && kokoroConsentAccepted}
 								<div class="flex w-full items-center justify-between gap-3 py-1">
 									<div class="min-w-0 pr-3 text-xs font-medium">{$i18n.t('Kokoro.js Dtype')}</div>
 
@@ -874,7 +964,7 @@
 							class={isDocumentCard ? 'px-4 pb-4 border-t border-gray-100 dark:border-gray-800' : ''}
 							transition:slide={{ duration: 180, easing: quintOut }}
 						>
-							{#if TTSEngine === 'browser-kokoro'}
+							{#if TTSEngine === 'browser-kokoro' && kokoroConsentAccepted}
 								{#if TTSModel}
 									<div>
 										{#if !isDocumentCard}

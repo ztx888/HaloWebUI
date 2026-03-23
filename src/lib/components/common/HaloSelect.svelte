@@ -4,7 +4,13 @@
 	import { createEventDispatcher, onDestroy, onMount, tick } from 'svelte';
 	import OverflowTooltip from '$lib/components/common/OverflowTooltip.svelte';
 
-	type Option = { value: string; label: string; disabled?: boolean };
+	type Option = {
+		value: string;
+		label: string;
+		disabled?: boolean;
+		description?: string;
+		badge?: string;
+	};
 
 	const dispatch = createEventDispatcher<{ change: { value: string } }>();
 
@@ -48,7 +54,9 @@
 		? options.filter((option) => {
 				const q = searchValue.toLowerCase();
 				return (
-					option.label.toLowerCase().includes(q) || String(option.value).toLowerCase().includes(q)
+					option.label.toLowerCase().includes(q) ||
+					String(option.value).toLowerCase().includes(q) ||
+					option.description?.toLowerCase().includes(q)
 				);
 			})
 		: options;
@@ -181,29 +189,45 @@
 		{/if}
 		<div class="max-h-60 overflow-y-auto scrollbar-hidden">
 			{#if filteredOptions.length > 0}
-				{#each filteredOptions as option (option.value)}
-					<Select.Item
-						value={option.value}
-						label={option.label}
-						disabled={option.disabled}
-						class="flex w-full items-center
-							px-2.5 py-1.5 text-sm rounded-lg
-							outline-none select-none cursor-pointer
-								transition-colors duration-75
-								data-[disabled]:opacity-40 data-[disabled]:cursor-not-allowed
-							{String(option.value) === String(value)
+					{#each filteredOptions as option (option.value)}
+						<Select.Item
+							value={option.value}
+							label={option.label}
+							disabled={option.disabled}
+							class="flex w-full items-start
+								px-2.5 py-1.5 text-sm rounded-lg
+								outline-none select-none cursor-pointer
+									transition-colors duration-75
+									data-[disabled]:opacity-40 data-[disabled]:cursor-not-allowed
+								{String(option.value) === String(value)
 						? 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20'
 						: 'text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 data-[highlighted]:bg-gray-100 dark:data-[highlighted]:bg-gray-800'}"
 					>
-						<OverflowTooltip
-							content={option.label}
-							className="min-w-0 flex-1"
-							textClassName="block truncate whitespace-nowrap"
-						>
-							{option.label}
-						</OverflowTooltip>
-					</Select.Item>
-				{/each}
+							<div class="min-w-0 flex-1">
+								<div class="flex items-center gap-2">
+									<OverflowTooltip
+										content={option.label}
+										className="min-w-0 flex-1"
+										textClassName="block truncate whitespace-nowrap"
+									>
+										{option.label}
+									</OverflowTooltip>
+									{#if option.badge}
+										<span
+											class="shrink-0 rounded-full bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-500 dark:bg-gray-800 dark:text-gray-400"
+										>
+											{option.badge}
+										</span>
+									{/if}
+								</div>
+								{#if option.description}
+									<div class="mt-0.5 text-xs leading-4 text-gray-500 dark:text-gray-400">
+										{option.description}
+									</div>
+								{/if}
+							</div>
+						</Select.Item>
+					{/each}
 			{:else}
 				<div class="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">{noResultsText}</div>
 			{/if}

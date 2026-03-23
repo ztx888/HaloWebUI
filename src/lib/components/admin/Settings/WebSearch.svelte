@@ -86,6 +86,14 @@
 	let webConfig: any = null;
 	let youtubeLanguage = '';
 	let youtubeTranslation = '';
+	let runtimeCapabilities = {
+		playwright_available: true,
+		firecrawl_available: true,
+		messages: {
+			playwright: '',
+			firecrawl: ''
+		}
+	};
 
 	// Task config for query generation toggles
 	let enableSearchQueryGeneration = true;
@@ -309,6 +317,26 @@
 		};
 	};
 
+	$: loaderEngineOptions = [
+		{ value: '', label: $i18n.t('Default') },
+		...webLoaderEngines.map((engine) => ({
+			value: engine,
+			label: engine,
+			disabled:
+				(engine === 'playwright' && !runtimeCapabilities.playwright_available) ||
+				(engine === 'firecrawl' && !runtimeCapabilities.firecrawl_available)
+		}))
+	];
+	$: selectedLoaderCapabilityMessage =
+		webConfig?.WEB_LOADER_ENGINE === 'playwright'
+			? runtimeCapabilities.messages.playwright
+			: webConfig?.WEB_LOADER_ENGINE === 'firecrawl'
+				? runtimeCapabilities.messages.firecrawl
+				: '';
+	$: selectedLoaderUnavailable =
+		(webConfig?.WEB_LOADER_ENGINE === 'playwright' && !runtimeCapabilities.playwright_available) ||
+		(webConfig?.WEB_LOADER_ENGINE === 'firecrawl' && !runtimeCapabilities.firecrawl_available);
+
 	let snapshot: ReturnType<typeof buildSnapshot> = null;
 	$: {
 		webConfig;
@@ -359,6 +387,7 @@
 
 			if (res?.web) {
 				webConfig = res.web;
+				runtimeCapabilities = res?.capabilities ?? runtimeCapabilities;
 				webConfig.ENABLE_WEB_SEARCH = webConfig.ENABLE_WEB_SEARCH ?? false;
 				webConfig.ENABLE_NATIVE_WEB_SEARCH = webConfig.ENABLE_NATIVE_WEB_SEARCH ?? false;
 				webConfig.DEFAULT_WEB_SEARCH_MODE = normalizeWebSearchMode(
@@ -392,6 +421,10 @@
 
 	const submitHandler = async () => {
 		if (!webConfig) return false;
+		if (selectedLoaderUnavailable) {
+			toast.error(selectedLoaderCapabilityMessage || $i18n.t('Current web loader is unavailable.'));
+			return false;
+		}
 
 		coerceDefaultWebSearchMode();
 
@@ -1098,15 +1131,18 @@
 									<div class="text-sm font-medium">{$i18n.t('Web Loader Engine')}</div>
 									<HaloSelect
 										bind:value={webConfig.WEB_LOADER_ENGINE}
-										options={[
-											{ value: '', label: $i18n.t('Default') },
-											...webLoaderEngines.map((engine) => ({ value: engine, label: engine }))
-										]}
+										options={loaderEngineOptions}
 										placeholder={$i18n.t('Select a engine')}
 										className="w-fit capitalize"
 									/>
 								</div>
 							</div>
+
+							{#if selectedLoaderUnavailable}
+								<div class="rounded-xl border border-amber-200/70 bg-amber-50 px-4 py-3 text-xs leading-relaxed text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-300">
+									{selectedLoaderCapabilityMessage}
+								</div>
+							{/if}
 
 							<!-- Engine-specific config -->
 							{#if webConfig.WEB_LOADER_ENGINE === '' || webConfig.WEB_LOADER_ENGINE === 'safe_web'}

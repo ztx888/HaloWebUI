@@ -131,6 +131,23 @@ def test_convert_chat_completions_to_responses_payload_injects_native_web_search
     assert r["tool_choice"] == "auto"
 
 
+def test_convert_chat_completions_to_responses_payload_strips_include_usage_stream_option():
+    chat = {
+        "model": "gpt-test",
+        "stream": True,
+        "stream_options": {"include_usage": True, "include_obfuscation": True},
+        "messages": [{"role": "user", "content": "Hello"}],
+    }
+
+    r = convert_chat_completions_to_responses_payload(
+        chat,
+        native_web_search_tool_type=None,
+    )
+
+    assert r["stream"] is True
+    assert r["stream_options"] == {"include_obfuscation": True}
+
+
 def test_convert_chat_completions_to_responses_payload_preserves_input_files():
     chat = {
         "model": "gpt-test",

@@ -45,10 +45,39 @@ from open_webui.utils.payload import (
     apply_model_system_prompt_to_body,
 )
 from open_webui.utils.error_handling import build_error_detail
+from open_webui.utils.native_web_search import (
+    build_native_web_search_support,
+)
 
 
 log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["OPENAI"])
+
+
+def _stringify_gemini_error_body(body) -> str:
+    if body is None:
+        return ""
+    if isinstance(body, str):
+        return body
+    try:
+        return json.dumps(body, ensure_ascii=False, default=str)
+    except Exception:
+        return str(body)
+
+
+def _format_gemini_upstream_error(*, request_url: str, status: int, body) -> str:
+    host = ""
+    try:
+        host = (urlsplit(request_url).hostname or "").strip()
+    except Exception:
+        host = ""
+
+    body_text = _stringify_gemini_error_body(body).strip()
+    parts = [
+        f"Gemini upstream error ({status}){f' from {host}' if host else ''}.",
+        (f"Upstream response: {body_text}" if body_text else ""),
+    ]
+    return "\n".join([part for part in parts if part])
 
 
 def _is_official_gemini_connection(url: str) -> bool:
@@ -60,10 +89,8 @@ def _is_official_gemini_connection(url: str) -> bool:
 
 
 def _connection_supports_native_web_search(url: str, api_config: dict) -> bool:
-    explicit = api_config.get("native_web_search_enabled") if isinstance(api_config, dict) else None
-    if isinstance(explicit, bool):
-        return explicit
-    return _is_official_gemini_connection(url)
+    support = build_native_web_search_support("gemini", url=url, api_config=api_config)
+    return support.get("supported") is True
 
 
 def _get_gemini_user_config(connection_user: Optional[UserModel]) -> tuple[list[str], list[str], dict]:
@@ -1142,9 +1169,6 @@ async def get_all_models_responses(request: Request, user: UserModel) -> list:
             continue
 
         api_config = cfgs.get(str(idx), {}) or {}
-        native_web_search_supported = _connection_supports_native_web_search(
-            base_urls[idx], api_config
-        )
         prefix_id = api_config.get("prefix_id", None)
         tags = api_config.get("tags", [])
         connection_name = (api_config.get("remark") or "").strip()
@@ -1154,6 +1178,12 @@ async def get_all_models_responses(request: Request, user: UserModel) -> list:
             except Exception:
                 connection_name = ""
         connection_icon = (api_config.get("icon") or "").strip()
+        native_web_search_support = build_native_web_search_support(
+            "gemini",
+            url=base_urls[idx],
+            api_config=api_config,
+            connection_name=connection_name,
+        )
 
         model_list = response.get("models", [])
         for model in model_list:
@@ -1167,7 +1197,10 @@ async def get_all_models_responses(request: Request, user: UserModel) -> list:
                 model["connection_icon"] = connection_icon
             if tags:
                 model["tags"] = tags
-            model["native_web_search_supported"] = native_web_search_supported
+            model["native_web_search_supported"] = (
+                native_web_search_support.get("supported") is True
+            )
+            model["native_web_search_support"] = dict(native_web_search_support)
 
     return responses
 
@@ -1221,6 +1254,15 @@ async def get_all_models(request: Request, user: UserModel) -> dict:
                             if "native_web_search_supported" in model
                             else {}
                         ),
+                        **(
+                            {
+                                "native_web_search_support": model[
+                                    "native_web_search_support"
+                                ]
+                            }
+                            if "native_web_search_support" in model
+                            else {}
+                        ),
                         **({"connection_name": model["connection_name"]} if "connection_name" in model else {}),
                         **({"connection_icon": model["connection_icon"]} if "connection_icon" in model else {}),
                         **({"tags": model["tags"]} if "tags" in model else {}),
@@ -1249,6 +1291,11 @@ async def get_models(
         api_config = cfgs.get(str(url_idx), {}) if isinstance(cfgs, dict) else {}
 
         response = await send_get_request(f"{url}/models", key, api_config)
+        native_web_search_support = build_native_web_search_support(
+            "gemini",
+            url=url,
+            api_config=api_config,
+        )
         if response and "models" in response:
             models = {
                 "data": [
@@ -1256,6 +1303,9 @@ async def get_models(
                         "id": m.get("name", "").replace("models/", ""),
                         "name": m.get("displayName", ""),
                         "owned_by": "google",
+                        "native_web_search_supported": native_web_search_support.get("supported")
+                        is True,
+                        "native_web_search_support": dict(native_web_search_support),
                     }
                     for m in response["models"]
                     if "generateContent" in m.get("supportedGenerationMethods", [])
@@ -1297,6 +1347,17 @@ async def verify_connection(
                 status_code=response.get("error", {}).get("code", 500),
                 detail=response.get("error", {}).get("message", "Unknown error"),
             )
+        support = build_native_web_search_support(
+            "gemini",
+            url=url,
+            api_config=config,
+        )
+        if isinstance(response.get("models"), list):
+            for model in response["models"]:
+                if not isinstance(model, dict):
+                    continue
+                model["native_web_search_supported"] = support.get("supported") is True
+                model["native_web_search_support"] = dict(support)
         return response
     except HTTPException:
         raise
@@ -1936,8 +1997,11 @@ async def generate_chat_completion(
                         last_err_text = fallback_err_text or last_err_text
 
                     if response is None:
-                        parsed_error = _parse_gemini_error_message(last_err_text)
-                        msg = f"[Gemini API Error {last_status}] {(parsed_error or last_err_text)[:500]}"
+                        msg = _format_gemini_upstream_error(
+                            request_url=non_stream_url if is_image_model else request_url,
+                            status=last_status or 500,
+                            body=last_err_text,
+                        )
                         error_chunk = {
                             "error": {
                                 "message": msg,
@@ -2059,8 +2123,14 @@ async def generate_chat_completion(
                 allow_drop_response_modalities=not is_image_model,
             )
             if response is None:
-                last_error = _parse_gemini_error_message(last_err_text) or "Gemini API Error"
-                raise HTTPException(status_code=last_status or 500, detail=last_error)
+                raise HTTPException(
+                    status_code=last_status or 500,
+                    detail=_format_gemini_upstream_error(
+                        request_url=request_url,
+                        status=last_status or 500,
+                        body=last_err_text,
+                    ),
+                )
 
             try:
                 gemini_response = await response.json(content_type=None)

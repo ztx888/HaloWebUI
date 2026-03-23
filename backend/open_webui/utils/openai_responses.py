@@ -154,6 +154,21 @@ def convert_tool_choice_chat_to_responses(tool_choice: Any) -> Any:
     return tool_choice
 
 
+def sanitize_stream_options_for_responses(stream_options: Any) -> Optional[dict]:
+    """
+    Responses API does not support Chat Completions' `stream_options.include_usage`.
+    Keep only options that are valid for Responses streaming.
+    """
+    if not isinstance(stream_options, dict):
+        return None
+
+    allowed_keys = {"include_obfuscation"}
+    sanitized = {
+        key: value for key, value in stream_options.items() if key in allowed_keys
+    }
+    return sanitized or None
+
+
 def _content_chat_to_responses(content: Any, *, role: str = "user") -> Any:
     """
     Convert Chat Completions message content into Responses message content parts.
@@ -334,10 +349,15 @@ def convert_chat_completions_to_responses_payload(
     if "stream" in chat_payload:
         responses_payload["stream"] = bool(chat_payload.get("stream"))
 
-    # stream_options is supported by Responses API (used for include_usage on streaming).
-    # Only include when streaming to avoid provider quirks.
+    # Responses API has its own stream_options schema and does not accept
+    # Chat Completions' `stream_options.include_usage`.
+    # Keep only options that are valid for Responses streaming.
     if responses_payload.get("stream") is True and isinstance(chat_payload.get("stream_options"), dict):
-        responses_payload["stream_options"] = chat_payload.get("stream_options")
+        stream_options = sanitize_stream_options_for_responses(
+            chat_payload.get("stream_options")
+        )
+        if stream_options:
+            responses_payload["stream_options"] = stream_options
 
     # max_tokens (chat) -> max_output_tokens (responses)
     max_tokens = chat_payload.get("max_tokens")

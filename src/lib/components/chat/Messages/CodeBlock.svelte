@@ -10,6 +10,14 @@
 	import { executeCode } from '$lib/apis/utils';
 	import { toast } from 'svelte-sonner';
 	import ChevronUpDown from '$lib/components/icons/ChevronUpDown.svelte';
+	import {
+		approvePyodideConsent,
+		canUsePyodideRuntime,
+		getPyodideDownloadSummary,
+		getPyodidePackagesForCode,
+		hasPyodideConsent,
+		usesRemotePyodideRuntime
+	} from '$lib/utils/browser-ai-assets';
 	import { getLanguageIcon } from '$lib/utils/language-icons';
 	import {
 		DEFAULT_MERMAID_THEME,
@@ -65,6 +73,9 @@
 	let saved = false;
 	let mermaidThemeObserver: MutationObserver | null = null;
 	const PYODIDE_DISABLED_MESSAGE = 'Pyodide is disabled in this build.';
+	let showPyodideConsent = false;
+	let pendingPyodideCode = '';
+	let pyodideConsentPackages: string[] = [];
 
 	const collapseCodeBlock = () => {
 		collapsed = !collapsed;
@@ -225,26 +236,21 @@
 	};
 
 	const executePythonAsWorker = async (code) => {
-		if (!APP_ENABLE_PYODIDE) {
+		if (!canUsePyodideRuntime()) {
 			stderr = PYODIDE_DISABLED_MESSAGE;
 			executing = false;
 			return;
 		}
 
-		let packages = [
-			code.includes('requests') ? 'requests' : null,
-			code.includes('bs4') ? 'beautifulsoup4' : null,
-			code.includes('numpy') ? 'numpy' : null,
-			code.includes('pandas') ? 'pandas' : null,
-			code.includes('sklearn') ? 'scikit-learn' : null,
-			code.includes('scipy') ? 'scipy' : null,
-			code.includes('re') ? 'regex' : null,
-			code.includes('seaborn') ? 'seaborn' : null,
-			code.includes('sympy') ? 'sympy' : null,
-			code.includes('tiktoken') ? 'tiktoken' : null,
-			code.includes('matplotlib') ? 'matplotlib' : null,
-			code.includes('pytz') ? 'pytz' : null
-		].filter(Boolean);
+		const packages = getPyodidePackagesForCode(code);
+
+		if (usesRemotePyodideRuntime() && !hasPyodideConsent()) {
+			pendingPyodideCode = code;
+			pyodideConsentPackages = packages;
+			showPyodideConsent = true;
+			executing = false;
+			return;
+		}
 
 		console.log(packages);
 
@@ -616,6 +622,44 @@
 					</button>
 				</div>
 			</div>
+
+			{#if showPyodideConsent}
+				<div class="border-b border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">
+					<div class="font-medium">浏览器 Python 运行时未准备就绪</div>
+					<div class="mt-1 text-xs leading-relaxed">
+						{getPyodideDownloadSummary(pyodideConsentPackages)}
+					</div>
+					<div class="mt-3 flex gap-2">
+						<button
+							class="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-amber-700"
+							on:click={async () => {
+								approvePyodideConsent();
+								showPyodideConsent = false;
+								const nextCode = pendingPyodideCode || code;
+								pendingPyodideCode = '';
+								pyodideConsentPackages = [];
+								executing = true;
+								await executePythonAsWorker(nextCode);
+							}}
+							type="button"
+						>
+							下载并启用
+						</button>
+						<button
+							class="rounded-lg bg-white px-3 py-1.5 text-xs font-medium text-amber-700 transition hover:bg-amber-100 dark:bg-transparent dark:text-amber-200 dark:hover:bg-amber-900/30"
+							on:click={() => {
+								showPyodideConsent = false;
+								pendingPyodideCode = '';
+								pyodideConsentPackages = [];
+								stderr = '已取消下载浏览器 Python 运行时。';
+							}}
+							type="button"
+						>
+							暂不
+						</button>
+					</div>
+				</div>
+			{/if}
 
 			<div
 				class="language-{lang} {editorClassName

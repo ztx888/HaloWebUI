@@ -4,6 +4,7 @@ declare global {
 	const APP_VERSION: string;
 	const APP_BUILD_HASH: string;
 	const APP_ENABLE_PYODIDE: boolean;
+	const APP_PYODIDE_INDEX_URL: string;
 
 	namespace App {
 		// interface Error {}

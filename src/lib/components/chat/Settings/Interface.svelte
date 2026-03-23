@@ -14,6 +14,11 @@
 		normalizeWebSearchMode,
 		type WebSearchMode
 	} from '$lib/utils/web-search-mode';
+	import {
+		buildWebSearchModeOptions,
+		getNativeWebSearchAvailabilityNote,
+		summarizeNativeWebSearchSupport
+	} from '$lib/utils/native-web-search';
 	const dispatch = createEventDispatcher();
 
 	const i18n = getContext('i18n');
@@ -262,29 +267,28 @@
 		});
 	};
 
-	$: hasAnyNativeWebSearchModel = ($models ?? []).some(
-		(model) => model?.native_web_search_supported === true
+	$: nativeWebSearchCatalogSummary = summarizeNativeWebSearchSupport($models ?? []);
+	$: webSearchModeOptions = buildWebSearchModeOptions(
+		(key, options) => $i18n.t(key, options),
+		$config,
+		$models ?? []
 	);
-	$: webSearchModeOptions = [
-		{ value: 'off' as WebSearchMode, label: $i18n.t('Off') },
-		...(($config?.features?.enable_halo_web_search ?? $config?.features?.enable_web_search)
-			? [{ value: 'halo' as WebSearchMode, label: 'HaloWebUI' }]
-			: []),
-		...($config?.features?.enable_native_web_search && hasAnyNativeWebSearchModel
-			? [
-					{ value: 'native' as WebSearchMode, label: $i18n.t('模型原生联网') },
-					{ value: 'auto' as WebSearchMode, label: $i18n.t('自动') }
-				]
-			: [])
-	];
-	$: currentWebSearchModeLabel =
-		webSearchModeOptions.find((option) => option.value === webSearchMode)?.label ??
-		getWebSearchModeLabel(webSearchMode);
+	$: currentWebSearchOption = webSearchModeOptions.find((option) => option.value === webSearchMode) ?? null;
+	$: currentWebSearchModeLabel = currentWebSearchOption?.label ?? getWebSearchModeLabel(webSearchMode);
+	$: currentWebSearchModeDescription = currentWebSearchOption?.description ?? '';
+	$: webSearchAvailabilityNote = getNativeWebSearchAvailabilityNote(
+		(key, options) => $i18n.t(key, options),
+		nativeWebSearchCatalogSummary,
+		'catalog'
+	);
 	$: if (
 		(($models ?? []).length > 0 || !$config?.features?.enable_native_web_search) &&
-		!webSearchModeOptions.some((option) => option.value === webSearchMode)
+		!webSearchModeOptions.some((option) => option.value === webSearchMode && option.disabled !== true)
 	) {
-		webSearchMode = webSearchModeOptions.some((option) => option.value === 'halo') ? 'halo' : 'off';
+		webSearchMode =
+			(['auto', 'halo', 'native', 'off'] as WebSearchMode[]).find((mode) =>
+				webSearchModeOptions.some((option) => option.value === mode && option.disabled !== true)
+			) ?? 'off';
 	}
 
 	const updateWebSearchMode = async (value: unknown) => {
@@ -938,24 +942,33 @@
 				<div class=" py-0.5 flex w-full justify-between">
 					<div class=" self-center text-xs">{$i18n.t('Web Search in Chat')}</div>
 
-					<div class="min-w-[10rem]">
-						<HaloSelect
-							value={webSearchMode}
-							options={webSearchModeOptions.map((option) => ({
-								value: option.value,
-								label: option.label
-							}))}
-							className="w-full"
-							on:change={(e) => {
-								updateWebSearchMode(e.detail?.value);
-							}}
-						/>
+						<div class="min-w-[10rem]">
+							<HaloSelect
+								value={webSearchMode}
+								options={webSearchModeOptions.map((option) => ({
+									value: option.value,
+									label: option.label,
+									description: option.description,
+									disabled: option.disabled,
+									badge: option.badge
+								}))}
+								className="w-full"
+								on:change={(e) => {
+									updateWebSearchMode(e.detail?.value);
+								}}
+							/>
+						</div>
+					</div>
+					<div class="pt-1 text-right text-[11px] text-gray-400 space-y-1">
+						<div>{$i18n.t('Current mode')}: {currentWebSearchModeLabel}</div>
+						{#if currentWebSearchModeDescription}
+							<div>{currentWebSearchModeDescription}</div>
+						{/if}
+						{#if webSearchAvailabilityNote}
+							<div>{webSearchAvailabilityNote}</div>
+						{/if}
 					</div>
 				</div>
-				<div class="pt-1 text-right text-[11px] text-gray-400">
-					{$i18n.t('Current mode')}: {currentWebSearchModeLabel}
-				</div>
-			</div>
 
 			<div>
 				<div class=" py-0.5 flex w-full justify-between">

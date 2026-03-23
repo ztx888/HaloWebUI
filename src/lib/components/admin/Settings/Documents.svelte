@@ -96,10 +96,25 @@
 	let embeddingModel = '';
 	let embeddingBatchSize = 1;
 	let rerankingModel = '';
+	let rerankingEngine = 'local';
 	let initialSnapshot = null;
 	let autoSyncBaseline = false;
 	let baselineSyncTimeout: ReturnType<typeof setTimeout> | null = null;
 	const BASELINE_SYNC_WINDOW_MS = 400;
+	let runtimeCapabilities = {
+		local_embedding_available: true,
+		local_reranking_available: true,
+		colbert_reranking_available: true,
+		playwright_available: true,
+		firecrawl_available: true,
+		messages: {
+			local_embedding: '',
+			local_reranking: '',
+			colbert_reranking: '',
+			playwright: '',
+			firecrawl: ''
+		}
+	};
 
 	let OpenAIUrl = '';
 	let OpenAIKey = '';
@@ -247,14 +262,35 @@
 		}
 	};
 
+	const isColbertRerankingModel = (model: string) =>
+		(model || '').includes('jinaai/jina-colbert-v2');
+
+	const getLocalRerankingMessage = () =>
+		isColbertRerankingModel(rerankingModel)
+			? runtimeCapabilities.messages.colbert_reranking
+			: runtimeCapabilities.messages.local_reranking;
+
+	$: localEmbeddingUnavailable =
+		embeddingEngine === '' && !runtimeCapabilities.local_embedding_available;
+	$: localRerankingUnavailable =
+		['', 'local'].includes(rerankingEngine) &&
+		rerankingModel !== '' &&
+		(isColbertRerankingModel(rerankingModel)
+			? !runtimeCapabilities.colbert_reranking_available
+			: !runtimeCapabilities.local_reranking_available);
+
 	const embeddingModelUpdateHandler = async () => {
+		if (localEmbeddingUnavailable) {
+			toast.error(runtimeCapabilities.messages.local_embedding);
+			return false;
+		}
 		if (embeddingEngine === '' && embeddingModel.split('/').length - 1 > 1) {
 			toast.error(
 				$i18n.t(
 					'Model filesystem path detected. Model shortname is required for update, cannot continue.'
 				)
 			);
-			return;
+			return false;
 		}
 		if (embeddingEngine === 'ollama' && embeddingModel === '') {
 			toast.error(
@@ -262,7 +298,7 @@
 					'Model filesystem path detected. Model shortname is required for update, cannot continue.'
 				)
 			);
-			return;
+			return false;
 		}
 
 		if (embeddingEngine === 'openai' && embeddingModel === '') {
@@ -271,12 +307,12 @@
 					'Model filesystem path detected. Model shortname is required for update, cannot continue.'
 				)
 			);
-			return;
+			return false;
 		}
 
 		if ((embeddingEngine === 'openai' && OpenAIKey === '') || OpenAIUrl === '') {
 			toast.error($i18n.t('OpenAI URL/Key required.'));
-			return;
+			return false;
 		}
 
 		updateEmbeddingModelLoading = true;
@@ -303,10 +339,17 @@
 			toast.success($i18n.t('Embedding model set to "{{embedding_model}}"', res), {
 				duration: 1000 * 10
 			});
+			return true;
 		}
+
+		return false;
 	};
 
 	const rerankingModelUpdateHandler = async () => {
+		if (localRerankingUnavailable) {
+			toast.error(getLocalRerankingMessage());
+			return false;
+		}
 		updateRerankingModelLoading = true;
 		const res = await updateRerankingConfig(localStorage.token, {
 			reranking_model: rerankingModel
@@ -327,7 +370,10 @@
 					duration: 1000 * 10
 				});
 			}
+			return true;
 		}
+
+		return false;
 	};
 
 	const submitHandler = async () => {
@@ -360,10 +406,16 @@
 		}
 
 		if (!RAGConfig.BYPASS_EMBEDDING_AND_RETRIEVAL) {
-			await embeddingModelUpdateHandler();
+			const embeddingUpdated = await embeddingModelUpdateHandler();
+			if (!embeddingUpdated) {
+				return;
+			}
 
 			if (RAGConfig.ENABLE_RAG_HYBRID_SEARCH) {
-				await rerankingModelUpdateHandler();
+				const rerankingUpdated = await rerankingModelUpdateHandler();
+				if (!rerankingUpdated) {
+					return;
+				}
 			}
 		}
 
@@ -396,6 +448,7 @@
 
 		if (rerankingConfig) {
 			rerankingModel = rerankingConfig.reranking_model;
+			rerankingEngine = rerankingConfig.reranking_engine ?? 'local';
 		}
 	};
 
@@ -407,6 +460,7 @@
 		]);
 
 		RAGConfig = ragRes;
+		runtimeCapabilities = ragRes?.capabilities ?? runtimeCapabilities;
 		await tick();
 		await tick();
 		startBaselineSync();
@@ -802,7 +856,11 @@
 									bind:value={embeddingEngine}
 									placeholder={$i18n.t('Select an embedding model engine')}
 									options={[
-										{ value: '', label: $i18n.t('Default (SentenceTransformers)') },
+										{
+											value: '',
+											label: $i18n.t('Default (SentenceTransformers)'),
+											disabled: !runtimeCapabilities.local_embedding_available
+										},
 										{ value: 'ollama', label: $i18n.t('Ollama') },
 										{ value: 'openai', label: $i18n.t('OpenAI') }
 									]}
@@ -818,6 +876,12 @@
 									}}
 								/>
 							</div>
+
+							{#if localEmbeddingUnavailable}
+								<div class="mt-3 rounded-xl border border-amber-200/70 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-300">
+									{runtimeCapabilities.messages.local_embedding}
+								</div>
+							{/if}
 
 							{#if embeddingEngine === 'openai'}
 								<div class="mt-3 space-y-3 border-t border-gray-100/60 pt-3 dark:border-gray-800/40">
@@ -897,7 +961,7 @@
 											on:click={() => {
 												embeddingModelUpdateHandler();
 											}}
-											disabled={updateEmbeddingModelLoading}
+											disabled={updateEmbeddingModelLoading || localEmbeddingUnavailable}
 										>
 											{#if updateEmbeddingModelLoading}
 												<Spinner className="size-4" />
@@ -985,7 +1049,7 @@
 													on:click={() => {
 														rerankingModelUpdateHandler();
 													}}
-													disabled={updateRerankingModelLoading}
+													disabled={updateRerankingModelLoading || localRerankingUnavailable}
 												>
 													{#if updateRerankingModelLoading}
 														<Spinner className="size-4" />
@@ -997,6 +1061,11 @@
 													{/if}
 												</button>
 											</div>
+											{#if localRerankingUnavailable}
+												<div class="mt-2 rounded-xl border border-amber-200/70 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-300">
+													{getLocalRerankingMessage()}
+												</div>
+											{/if}
 										</div>
 									{/if}
 

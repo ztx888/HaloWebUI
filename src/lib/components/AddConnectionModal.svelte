@@ -363,6 +363,94 @@
 		!ollama && !direct && !gemini && !anthropic && !azure && !isOfficialOpenAIConnection;
 	$: showNativeFileInputsToggle =
 		!ollama && !direct && !gemini && !anthropic && !azure && !isForceMode && useResponsesApi;
+	$: nativeWebSearchPreview = (() => {
+		if (!showNativeWebSearchToggle) {
+			return null;
+		}
+
+		if (azure) {
+			return {
+				tone: 'slate',
+				label: $i18n.t('Unavailable'),
+				description: $i18n.t(
+					'Azure OpenAI endpoints do not expose this model-native web search path in HaloWebUI.'
+				)
+			};
+		}
+
+		if (gemini) {
+			const official = isOfficialGeminiHostname(
+				getHostname(url || 'https://generativelanguage.googleapis.com/v1beta')
+			);
+			if (nativeWebSearchEnabled) {
+				return official
+					? {
+							tone: 'green',
+							label: $i18n.t('Official Default'),
+							description: $i18n.t(
+								'Official Gemini endpoints are detected automatically, so chat mode can use model-native web search right away.'
+							)
+						}
+					: {
+							tone: 'green',
+							label: $i18n.t('Manually Enabled'),
+							description: $i18n.t(
+								'This compatible Gemini endpoint will be treated as native-web-search capable. Native mode can now actively try the upstream built-in search tool.'
+							)
+						};
+			}
+
+			return official
+				? {
+						tone: 'slate',
+						label: $i18n.t('Manually Disabled'),
+						description: $i18n.t(
+							'This official Gemini endpoint was detected, but native web search is currently disabled for this connection.'
+						)
+					}
+				: {
+						tone: 'amber',
+						label: $i18n.t('Unverified'),
+						description: $i18n.t(
+							'This compatible Gemini endpoint is not verified yet. Leave it off for safe fallback behavior, or enable it if the upstream supports built-in search tools.'
+						)
+					};
+		}
+
+		if (nativeWebSearchEnabled) {
+			return isOfficialOpenAIConnection
+				? {
+						tone: 'green',
+						label: $i18n.t('Official Default'),
+						description: $i18n.t(
+							'Official OpenAI endpoints are detected automatically, so chat mode can use model-native web search right away.'
+						)
+					}
+				: {
+						tone: 'green',
+						label: $i18n.t('Manually Enabled'),
+						description: $i18n.t(
+							'This compatible OpenAI endpoint will be treated as native-web-search capable. Native mode can now actively try the upstream built-in search tool.'
+						)
+					};
+		}
+
+		return isOfficialOpenAIConnection
+			? {
+					tone: 'slate',
+					label: $i18n.t('Manually Disabled'),
+					description: $i18n.t(
+						'This official OpenAI endpoint was detected, but native web search is currently disabled for this connection.'
+					)
+				}
+			: {
+					tone: 'amber',
+					label: $i18n.t('Unverified'),
+					description: $i18n.t(
+						'This compatible OpenAI endpoint is not verified yet. Leave it off for safe fallback behavior, or enable it if the upstream supports built-in search tools.'
+					)
+				};
+	})();
 	$: if (show && showNativeWebSearchToggle && !nativeWebSearchTouched) {
 		nativeWebSearchEnabled = getDefaultNativeWebSearchEnabled();
 	}
@@ -632,11 +720,11 @@
 							}
 						: {}),
 					...(!ollama && azure ? { azure: true, api_version: apiVersion } : {}),
-					...(!ollama && !direct && !anthropic
-						? {
-								native_web_search_enabled: nativeWebSearchEnabled
-							}
-						: {}),
+						...(!ollama && !direct && !anthropic && !azure
+							? {
+									native_web_search_enabled: nativeWebSearchEnabled
+								}
+							: {}),
 					...(showNativeWebSearchToolType &&
 					nativeWebSearchEnabled &&
 					nativeWebSearchToolType.trim()
@@ -1468,11 +1556,11 @@
 										>
 											{$i18n.t('模型原生联网搜索')}
 										</div>
-										<div class="flex items-center justify-between">
-											<div>
-												<div class="text-sm font-medium">
-													{$i18n.t('启用模型原生联网搜索')}
-												</div>
+											<div class="flex items-center justify-between">
+												<div>
+													<div class="text-sm font-medium">
+														{$i18n.t('启用模型原生联网搜索')}
+													</div>
 												<div class="text-xs text-gray-400 mt-0.5">
 													{#if gemini}
 														{$i18n.t(
@@ -1485,17 +1573,35 @@
 													{/if}
 												</div>
 											</div>
-											<Switch
-												state={nativeWebSearchEnabled}
-												on:change={(e) => {
-													nativeWebSearchEnabled = e.detail;
-													nativeWebSearchTouched = true;
-												}}
-											/>
-										</div>
+												{#if azure}
+													<div class="text-xs font-medium text-gray-400 dark:text-gray-500">
+														{$i18n.t('Unavailable')}
+													</div>
+												{:else}
+													<Switch
+														state={nativeWebSearchEnabled}
+														on:change={(e) => {
+															nativeWebSearchEnabled = e.detail;
+															nativeWebSearchTouched = true;
+														}}
+													/>
+												{/if}
+											</div>
+											{#if nativeWebSearchPreview}
+												<div
+													class="rounded-lg px-3 py-2 text-xs leading-5 {nativeWebSearchPreview.tone === 'green'
+														? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300'
+														: nativeWebSearchPreview.tone === 'amber'
+															? 'bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-300'
+															: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'}"
+												>
+													<div class="font-medium">{nativeWebSearchPreview.label}</div>
+													<div>{nativeWebSearchPreview.description}</div>
+												</div>
+											{/if}
 
-										{#if showNativeWebSearchToolType && nativeWebSearchEnabled}
-											<div class="flex flex-col">
+											{#if showNativeWebSearchToolType && nativeWebSearchEnabled}
+												<div class="flex flex-col">
 												<label
 													for="native-web-search-tool-type"
 													class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"

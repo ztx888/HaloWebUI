@@ -16,8 +16,8 @@
 	let dropdownOpen = false;
 
 	const effortSteps = [
-		{ value: null, label: '默认' },
 		{ value: 'none', label: '关闭' },
+		{ value: null, label: '默认' },
 		{ value: 'low', label: 'Low' },
 		{ value: 'medium', label: 'Med' },
 		{ value: 'high', label: 'High' },
@@ -26,8 +26,8 @@
 	];
 
 	const tokenSteps = [
-		{ value: null, label: '默认' },
 		{ value: 0, label: '关闭' },
+		{ value: null, label: '默认' },
 		{ value: 2048, label: '2K' },
 		{ value: 8192, label: '8K' },
 		{ value: 16384, label: '16K' },
@@ -40,7 +40,7 @@
 	let customValue = '';
 
 	// Auto-detect mode from external changes
-	$: if (maxThinkingTokens != null && maxThinkingTokens > 0) {
+	$: if (maxThinkingTokens != null) {
 		activeMode = 'budget';
 	} else if (reasoningEffort) {
 		activeMode = 'effort';
@@ -84,8 +84,8 @@
 
 	// 滑动条每个 step 的颜色（bg-xxx 格式）
 	const effortSliderColors = [
-		'bg-gray-400 dark:bg-gray-500', // 默认
-		'bg-gray-400 dark:bg-gray-500', // 关闭
+		'bg-gray-500 dark:bg-gray-400', // 关闭
+		'bg-slate-500 dark:bg-slate-400', // 默认
 		'bg-sky-500 dark:bg-sky-400', // Low
 		'bg-blue-500 dark:bg-blue-400', // Med
 		'bg-amber-500 dark:bg-amber-400', // High
@@ -93,8 +93,8 @@
 		'bg-red-500 dark:bg-red-400' // Max
 	];
 	const budgetSliderColors = [
-		'bg-gray-400 dark:bg-gray-500', // 默认
-		'bg-gray-400 dark:bg-gray-500', // 关闭
+		'bg-gray-500 dark:bg-gray-400', // 关闭
+		'bg-slate-500 dark:bg-slate-400', // 默认
 		'bg-sky-500 dark:bg-sky-400', // 2K
 		'bg-blue-500 dark:bg-blue-400', // 8K
 		'bg-amber-500 dark:bg-amber-400', // 16K
@@ -167,7 +167,7 @@
 			transition={flyAndScale}
 		>
 			<!-- 标题 -->
-			<div class="px-2.5 py-1.5 text-xs font-medium text-gray-400 dark:text-gray-500">
+			<div class="px-2.5 py-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">
 				{$i18n.t('思考强度')}
 			</div>
 
@@ -180,7 +180,7 @@
 					class="flex-1 text-xs py-1 rounded-md transition-all duration-200 cursor-pointer
 						{activeMode === 'effort'
 						? 'bg-white dark:bg-gray-700 shadow-sm text-blue-600 dark:text-blue-400 font-medium'
-						: 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}"
+							: 'text-gray-600 dark:text-gray-300 hover:text-gray-800 dark:hover:text-gray-100'}"
 					on:click={() => switchMode('effort')}
 				>
 					强度
@@ -190,7 +190,7 @@
 					class="flex-1 text-xs py-1 rounded-md transition-all duration-200 cursor-pointer
 						{activeMode === 'budget'
 						? 'bg-white dark:bg-gray-700 shadow-sm text-blue-600 dark:text-blue-400 font-medium'
-						: 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}"
+							: 'text-gray-600 dark:text-gray-300 hover:text-gray-800 dark:hover:text-gray-100'}"
 					on:click={() => switchMode('budget')}
 				>
 					预算
@@ -259,7 +259,7 @@
 					class="text-[10px] transition-colors duration-150 cursor-pointer
 						{customMode
 						? 'text-blue-500 dark:text-blue-400'
-						: 'text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300'}"
+							: 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'}"
 					on:click={toggleCustom}
 				>
 					{customMode ? '返回预设' : '自定义'}

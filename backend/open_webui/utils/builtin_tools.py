@@ -24,6 +24,7 @@ from open_webui.models.channels import Channels
 from open_webui.models.files import Files
 from open_webui.models.knowledge import Knowledges
 from open_webui.models.memories import Memories
+from open_webui.retrieval.runtime import ensure_reranking_runtime
 from open_webui.models.messages import Messages
 from open_webui.models.users import UserModel
 from open_webui.retrieval.vector.connector import VECTOR_DB_CLIENT
@@ -482,7 +483,7 @@ def get_builtin_tools(
                     queries=[q],
                     embedding_function=lambda text, prefix: embed(text, prefix=prefix),
                     k=limit,
-                    reranking_function=request.app.state.rf,
+                    reranking_function=ensure_reranking_runtime(request.app),
                     k_reranker=request.app.state.config.TOP_K_RERANKER,
                     r=request.app.state.config.RELEVANCE_THRESHOLD,
                 )

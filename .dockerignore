@@ -1,3 +1,4 @@
+.git
 .github
 .DS_Store
 docs
@@ -9,6 +10,10 @@ build
 output
 .playwright
 .pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
 .env
 .env.*
 .claude
@@ -16,8 +21,11 @@ output
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 __pycache__
+backend/__pycache__
+backend/**/*.pyc
 .idea
 venv
+backend/.venv
 _old
 uploads
 .ipynb_checkpoints

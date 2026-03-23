@@ -95,7 +95,7 @@
 		aria-valuetext={steps[currentIndex]?.label ?? ''}
 	>
 		<!-- Background track -->
-		<div class="absolute left-0 right-0 h-1 rounded-full bg-gray-200 dark:bg-gray-700" />
+		<div class="absolute left-0 right-0 h-1 rounded-full bg-gray-300 dark:bg-gray-700" />
 
 		<!-- Filled track -->
 		<div
@@ -106,7 +106,7 @@
 		<!-- Tick dots -->
 		{#each steps as _, i}
 			{@const tickPct = steps.length > 1 ? (i / (steps.length - 1)) * 100 : 0}
-			{@const tickBg = i <= currentIndex ? currentBg : 'bg-gray-300 dark:bg-gray-600'}
+			{@const tickBg = i <= currentIndex ? currentBg : 'bg-gray-400 dark:bg-gray-500'}
 			<div
 				class="absolute w-1.5 h-1.5 rounded-full -translate-x-1/2 transition-colors duration-150
 					{tickBg}"
@@ -130,7 +130,7 @@
 			{@const labelColor =
 				i === currentIndex
 					? currentText
-					: 'text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300'}
+					: 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'}
 			<button
 				type="button"
 				class="absolute text-[10px] leading-tight text-center transition-all duration-150 cursor-pointer

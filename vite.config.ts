@@ -7,6 +7,9 @@ import { viteStaticCopy } from 'vite-plugin-static-copy';
 
 const enablePyodide = process.env.ENABLE_PYODIDE === 'true';
 const enableSourceMap = process.env.VITE_SOURCEMAP === 'true';
+const pyodideRemoteIndexUrl =
+	process.env.PYODIDE_INDEX_URL ?? 'https://cdn.jsdelivr.net/pyodide/v0.27.3/full/';
+const pyodideIndexUrl = enablePyodide ? '/pyodide/' : pyodideRemoteIndexUrl;
 
 const stripPyodideAssets = () => ({
 	name: 'strip-pyodide-assets',
@@ -82,7 +85,8 @@ export default defineConfig({
 	define: {
 		APP_VERSION: JSON.stringify(process.env.npm_package_version),
 		APP_BUILD_HASH: JSON.stringify(process.env.APP_BUILD_HASH || 'dev-build'),
-		APP_ENABLE_PYODIDE: JSON.stringify(enablePyodide)
+		APP_ENABLE_PYODIDE: JSON.stringify(enablePyodide),
+		APP_PYODIDE_INDEX_URL: JSON.stringify(pyodideIndexUrl)
 	},
 	build: {
 		sourcemap: enableSourceMap

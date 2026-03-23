@@ -23,7 +23,7 @@ const UPLOADS_DIR = '/mnt/uploads';
 const initializePyodide = async () => {
 	// Ensure Pyodide is loaded once and cached in the worker's global scope
 	if (!self.pyodide) {
-		self.indexURL = '/pyodide/';
+		self.indexURL = APP_PYODIDE_INDEX_URL;
 		self.stdout = '';
 		self.stderr = '';
 		self.cells = {};
@@ -82,7 +82,7 @@ const executeCode = async (id: string, code: string) => {
 		self.cells[id].status = 'completed';
 	} catch (error) {
 		self.cells[id].status = 'error';
-		self.cells[id].stderr += `\n${error.toString()}`;
+		self.cells[id].stderr += `\n${error instanceof Error ? error.message : String(error)}`;
 	} finally {
 		// Notify parent thread when execution completes
 		self.postMessage({
@@ -123,7 +123,7 @@ self.onmessage = async (event) => {
 					type: 'uploadResult',
 					filename,
 					success: false,
-					error: e.toString()
+					error: e instanceof Error ? e.message : String(e)
 				});
 			}
 			break;

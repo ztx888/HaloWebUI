@@ -47,6 +47,11 @@
 		normalizeWebSearchMode,
 		type WebSearchMode
 	} from '$lib/utils/web-search-mode';
+	import {
+		buildWebSearchModeOptions,
+		getNativeWebSearchAvailabilityNote,
+		summarizeNativeWebSearchSupport
+	} from '$lib/utils/native-web-search';
 
 	const dispatch = createEventDispatcher();
 	const i18n: Writable<any> = getContext('i18n');
@@ -394,26 +399,27 @@
 		webSearchMode = normalizeWebSearchMode(e.detail?.value, 'halo');
 	};
 
-	$: hasAnyNativeWebSearchModel = ($models ?? []).some(
-		(model) => model?.native_web_search_supported === true
+	$: nativeWebSearchCatalogSummary = summarizeNativeWebSearchSupport($models ?? []);
+	$: webSearchModeOptions = buildWebSearchModeOptions(
+		(key, options) => $i18n.t(key, options),
+		$config,
+		$models ?? []
 	);
-	$: webSearchModeOptions = [
-		{ value: 'off' as WebSearchMode, label: $i18n.t('Off') },
-		...(($config?.features?.enable_halo_web_search ?? $config?.features?.enable_web_search)
-			? [{ value: 'halo' as WebSearchMode, label: 'HaloWebUI' }]
-			: []),
-		...($config?.features?.enable_native_web_search && hasAnyNativeWebSearchModel
-			? [
-					{ value: 'native' as WebSearchMode, label: $i18n.t('模型原生联网') },
-					{ value: 'auto' as WebSearchMode, label: $i18n.t('自动') }
-				]
-			: [])
-	];
+	$: currentWebSearchOption = webSearchModeOptions.find((option) => option.value === webSearchMode) ?? null;
+	$: currentWebSearchModeDescription = currentWebSearchOption?.description ?? '';
+	$: webSearchAvailabilityNote = getNativeWebSearchAvailabilityNote(
+		(key, options) => $i18n.t(key, options),
+		nativeWebSearchCatalogSummary,
+		'catalog'
+	);
 	$: if (
 		(($models ?? []).length > 0 || !$config?.features?.enable_native_web_search) &&
-		!webSearchModeOptions.some((option) => option.value === webSearchMode)
+		!webSearchModeOptions.some((option) => option.value === webSearchMode && option.disabled !== true)
 	) {
-		webSearchMode = webSearchModeOptions.some((option) => option.value === 'halo') ? 'halo' : 'off';
+		webSearchMode =
+			(['auto', 'halo', 'native', 'off'] as WebSearchMode[]).find((mode) =>
+				webSearchModeOptions.some((option) => option.value === mode && option.disabled !== true)
+			) ?? 'off';
 	}
 
 	const onBackgroundFileChange = async () => {
@@ -2380,22 +2386,35 @@
 											</div>
 											<Switch bind:state={userLocation} />
 										</div>
-										<div class="glass-item px-4 py-3 space-y-2">
-											<div class="flex items-center justify-between gap-4">
-												<div class="text-sm font-medium">
-													{$i18n.t('Web Search in Chat')}
+											<div class="glass-item px-4 py-3 space-y-2">
+												<div class="flex items-center justify-between gap-4">
+													<div class="text-sm font-medium">
+														{$i18n.t('Web Search in Chat')}
+													</div>
+													<HaloSelect
+														value={webSearchMode}
+														options={webSearchModeOptions.map((option) => ({
+															value: option.value,
+															label: option.label,
+															description: option.description,
+															disabled: option.disabled,
+															badge: option.badge
+														}))}
+														className="w-52"
+														on:change={onWebSearchChange}
+													/>
 												</div>
-												<HaloSelect
-													value={webSearchMode}
-													options={webSearchModeOptions.map((option) => ({
-														value: option.value,
-														label: option.label
-													}))}
-													className="w-52"
-													on:change={onWebSearchChange}
-												/>
+												{#if currentWebSearchModeDescription}
+													<div class="text-xs leading-5 text-gray-500 dark:text-gray-400">
+														{currentWebSearchModeDescription}
+													</div>
+												{/if}
+												{#if webSearchAvailabilityNote}
+													<div class="text-xs leading-5 text-gray-500 dark:text-gray-400">
+														{webSearchAvailabilityNote}
+													</div>
+												{/if}
 											</div>
-										</div>
 										<div class="flex items-center justify-between glass-item px-4 py-3">
 											<div class="text-sm font-medium">
 												{$i18n.t('iframe Sandbox Allow Same Origin')}

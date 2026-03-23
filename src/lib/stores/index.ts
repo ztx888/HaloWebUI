@@ -102,12 +102,25 @@ export const playingNotificationSound = writable(false);
 
 export type Model = OpenAIModel | OllamaModel;
 
+export type NativeWebSearchSupport = {
+	status: 'supported' | 'unknown' | 'unsupported';
+	reason?: string;
+	source?: string;
+	provider?: string;
+	official?: boolean;
+	configured?: boolean | null;
+	supported?: boolean;
+	can_attempt?: boolean;
+	connection_name?: string;
+};
+
 type BaseModel = {
 	id: string;
 	name: string;
 	info?: ModelConfig;
 	owned_by: 'ollama' | 'openai' | 'google' | 'anthropic';
 	native_web_search_supported?: boolean;
+	native_web_search_support?: NativeWebSearchSupport;
 };
 
 export interface OpenAIModel extends BaseModel {

@@ -291,8 +291,8 @@
 	let showValves = false;
 
 	const effortSteps = [
-		{ value: null, label: '默认' },
 		{ value: 'none', label: '关闭' },
+		{ value: null, label: '默认' },
 		{ value: 'low', label: 'Low' },
 		{ value: 'medium', label: 'Medium' },
 		{ value: 'high', label: 'High' },
@@ -301,8 +301,8 @@
 	];
 
 	const tokenSteps = [
-		{ value: null, label: '默认' },
 		{ value: 0, label: '关闭' },
+		{ value: null, label: '默认' },
 		{ value: 2048, label: '2K' },
 		{ value: 8192, label: '8K' },
 		{ value: 16384, label: '16K' },
@@ -312,8 +312,8 @@
 
 	// 滑动条每个 step 的颜色
 	const effortSliderColors = [
-		'bg-gray-400 dark:bg-gray-500', // 默认
-		'bg-gray-400 dark:bg-gray-500', // 关闭
+		'bg-gray-500 dark:bg-gray-400', // 关闭
+		'bg-slate-500 dark:bg-slate-400', // 默认
 		'bg-sky-500 dark:bg-sky-400', // Low
 		'bg-blue-500 dark:bg-blue-400', // Medium
 		'bg-amber-500 dark:bg-amber-400', // High
@@ -321,8 +321,8 @@
 		'bg-red-500 dark:bg-red-400' // Max
 	];
 	const budgetSliderColors = [
-		'bg-gray-400 dark:bg-gray-500', // 默认
-		'bg-gray-400 dark:bg-gray-500', // 关闭
+		'bg-gray-500 dark:bg-gray-400', // 关闭
+		'bg-slate-500 dark:bg-slate-400', // 默认
 		'bg-sky-500 dark:bg-sky-400', // 2K
 		'bg-blue-500 dark:bg-blue-400', // 8K
 		'bg-amber-500 dark:bg-amber-400', // 16K
@@ -381,8 +381,8 @@
 			customTokenMode = true;
 			customTokenValue = String(currentVal);
 		}
-		// 外部设置了 budget → 自动切到预算模式
-		if (currentVal !== null && currentVal > 0) activeMode = 'budget';
+		// 外部设置了 budget（包括关闭）→ 自动切到预算模式
+		if (currentVal !== null) activeMode = 'budget';
 	}
 </script>
 

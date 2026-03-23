@@ -60,6 +60,9 @@ from open_webui.utils.openai_responses import (
     iter_responses_events,
     responses_events_to_chat_completions_sse,
 )
+from open_webui.utils.native_web_search import (
+    build_native_web_search_support,
+)
 
 from open_webui.utils.auth import get_admin_user, get_verified_user
 from open_webui.utils.access_control import has_access
@@ -111,10 +114,8 @@ def _get_openai_chat_completions_url(
 
 
 def _connection_supports_native_web_search(url: str, api_config: dict) -> bool:
-    explicit = api_config.get("native_web_search_enabled") if isinstance(api_config, dict) else None
-    if isinstance(explicit, bool):
-        return explicit
-    return _is_official_openai_connection(url)
+    support = build_native_web_search_support("openai", url=url, api_config=api_config)
+    return support.get("supported") is True
 
 
 def _coerce_bool(value: object, default: bool = False) -> bool:
@@ -491,6 +492,37 @@ def _normalize_openai_models_response(body) -> Optional[dict]:
         return {"object": "list", "data": normalized}
 
     return None
+
+
+def _apply_native_web_search_support_to_models_response(
+    body: Optional[dict],
+    *,
+    url: str,
+    api_config: Optional[dict],
+    connection_name: Optional[str] = None,
+) -> Optional[dict]:
+    if not isinstance(body, dict):
+        return body
+
+    support = build_native_web_search_support(
+        "openai",
+        url=url,
+        api_config=api_config,
+        connection_name=connection_name,
+    )
+
+    data = body.get("data")
+    if isinstance(data, list):
+        for model in data:
+            if not isinstance(model, dict):
+                continue
+            model["native_web_search_supported"] = support.get("supported") is True
+            model["native_web_search_support"] = dict(support)
+
+    meta = body.get("_openwebui")
+    body["_openwebui"] = meta if isinstance(meta, dict) else {}
+    body["_openwebui"]["native_web_search_support"] = dict(support)
+    return body
 
 
 def _is_dashscope_compatible_connection(url: str) -> bool:
@@ -1076,10 +1108,6 @@ async def get_all_models_responses(request: Request, user: UserModel) -> list:
 
         url = base_urls[idx]
         api_config = cfgs.get(str(idx), cfgs.get(url, {})) or {}
-        native_web_search_supported = _connection_supports_native_web_search(
-            url, api_config
-        )
-
         prefix_id = (api_config.get("prefix_id") or "").strip() or None
         connection_name = (api_config.get("remark") or "").strip()
         if not connection_name:
@@ -1087,6 +1115,12 @@ async def get_all_models_responses(request: Request, user: UserModel) -> list:
                 connection_name = urlparse(url).hostname or ""
             except Exception:
                 connection_name = ""
+        native_web_search_support = build_native_web_search_support(
+            "openai",
+            url=url,
+            api_config=api_config,
+            connection_name=connection_name,
+        )
         tags = api_config.get("tags", [])
         connection_icon = (api_config.get("icon") or "").strip()
 
@@ -1109,7 +1143,10 @@ async def get_all_models_responses(request: Request, user: UserModel) -> list:
             if connection_icon:
                 model["connection_icon"] = connection_icon
             model["name"] = display_name
-            model["native_web_search_supported"] = native_web_search_supported
+            model["native_web_search_supported"] = (
+                native_web_search_support.get("supported") is True
+            )
+            model["native_web_search_support"] = dict(native_web_search_support)
 
             if prefix_id:
                 model["original_id"] = original_id
@@ -1252,7 +1289,11 @@ async def get_models(
                             )
                         ]
 
-                    models = response_data
+                    models = _apply_native_web_search_support_to_models_response(
+                        response_data,
+                        url=url,
+                        api_config=api_config,
+                    )
             except aiohttp.ClientError as e:
                 # ClientError covers all aiohttp requests issues
                 log.exception(f"Client error: {str(e)}")
@@ -1307,7 +1348,11 @@ async def verify_connection(
                 if r.status == 200:
                     normalized_response = _normalize_openai_models_response(response_body)
                     if normalized_response is not None:
-                        return normalized_response
+                        return _apply_native_web_search_support_to_models_response(
+                            normalized_response,
+                            url=url,
+                            api_config=api_config,
+                        )
 
                     raise HTTPException(
                         status_code=400,

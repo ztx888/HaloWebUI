@@ -55,6 +55,9 @@
 		normalizeWebSearchMode,
 		type WebSearchMode
 	} from '$lib/utils/web-search-mode';
+	import {
+		buildWebSearchModeOptions
+	} from '$lib/utils/native-web-search';
 
 	import XMark from '../icons/XMark.svelte';
 	import Headphone from '../icons/Headphone.svelte';
@@ -110,6 +113,9 @@
 
 	$: normalizedWebSearchMode = normalizeWebSearchMode(webSearchMode, 'off');
 	$: webSearchActive = isWebSearchEnabled(normalizedWebSearchMode);
+	$: webSearchFeatureEnabled =
+		Boolean($config?.features?.enable_halo_web_search ?? $config?.features?.enable_web_search) ||
+		Boolean($config?.features?.enable_native_web_search);
 	$: selectedModelLookupIds = selectedModelIds.filter((id) => typeof id === 'string' && id.trim() !== '');
 	$: selectedModelObjects = selectedModelIds
 		.map((id) =>
@@ -118,34 +124,32 @@
 		.filter(Boolean);
 	$: hasResolvedSelectedModels =
 		selectedModelLookupIds.length === 0 || selectedModelObjects.length === selectedModelLookupIds.length;
-	$: nativeWebSearchAvailableForSelection =
-		hasResolvedSelectedModels &&
-		selectedModelObjects.length > 0 &&
-		selectedModelObjects.every((model) => model?.native_web_search_supported === true);
-	$: webSearchModeOptions = [
-		{ value: 'off' as WebSearchMode, label: $i18n.t('Off') },
-		...(($config?.features?.enable_halo_web_search ?? $config?.features?.enable_web_search)
-			? [{ value: 'halo' as WebSearchMode, label: 'HaloWebUI' }]
-			: []),
-		...($config?.features?.enable_native_web_search && nativeWebSearchAvailableForSelection
-			? [
-					{ value: 'native' as WebSearchMode, label: $i18n.t('模型原生联网') },
-					{ value: 'auto' as WebSearchMode, label: $i18n.t('自动') }
-				]
-			: [])
-	];
-	$: currentWebSearchModeLabel =
-		webSearchModeOptions.find((option) => option.value === normalizedWebSearchMode)?.label ??
-		$i18n.t('Off');
-	$: fallbackWebSearchMode = webSearchModeOptions.some((option) => option.value === 'halo')
-		? ('halo' as WebSearchMode)
-		: ('off' as WebSearchMode);
+	$: webSearchModeOptions = buildWebSearchModeOptions(
+		(key, options) => $i18n.t(key, options),
+		$config,
+		hasResolvedSelectedModels ? selectedModelObjects : []
+	);
+	$: currentWebSearchOption =
+		webSearchModeOptions.find((option) => option.value === normalizedWebSearchMode) ?? null;
+	$: currentWebSearchModeLabel = currentWebSearchOption?.label ?? $i18n.t('Off');
+	$: currentWebSearchBadgeLabel =
+		normalizedWebSearchMode === 'native'
+			? $i18n.t('Model Built-in')
+			: normalizedWebSearchMode === 'auto'
+				? $i18n.t('Smart')
+				: currentWebSearchModeLabel;
+	$: fallbackWebSearchMode =
+		(['auto', 'halo', 'native', 'off'] as WebSearchMode[]).find((mode) =>
+			webSearchModeOptions.some((option) => option.value === mode && !option.disabled)
+		) ?? ('off' as WebSearchMode);
 
 	const syncWebSearchModeWithOptions = () => {
 		const normalizedMode = normalizeWebSearchMode(webSearchMode, 'off');
 		if (
 			hasResolvedSelectedModels &&
-			!webSearchModeOptions.some((option) => option.value === normalizedMode) &&
+			!webSearchModeOptions.some(
+				(option) => option.value === normalizedMode && option.disabled !== true
+			) &&
 			webSearchMode !== fallbackWebSearchMode
 		) {
 			webSearchMode = fallbackWebSearchMode;
@@ -156,16 +160,36 @@
 		syncWebSearchModeWithOptions();
 	});
 
-	const getWebSearchBadgeClass = (mode: WebSearchMode) => {
-		switch (normalizeWebSearchMode(mode, 'off')) {
-			case 'native':
-				return 'text-emerald-500 dark:text-emerald-400';
+	$: currentWebSearchTooltip = (() => {
+		switch (normalizedWebSearchMode) {
 			case 'auto':
-				return 'text-cyan-500 dark:text-cyan-400';
+				return $i18n.t('智能联网搜索已开启');
+			case 'native':
+				return $i18n.t('模型原生联网搜索已开启');
+			case 'halo':
+				return $i18n.t('HaloWebUI 联网搜索已开启');
 			default:
-				return 'text-blue-500 dark:text-blue-400';
+				return '';
 		}
-	};
+	})();
+
+	const featureBadgeBaseClass =
+		'group shrink-0 rounded-full flex items-center border transition-colors duration-200 cursor-pointer bg-sky-50/90 hover:bg-sky-100/85 dark:bg-slate-800/70 dark:hover:bg-slate-800/90 border-sky-200/60 dark:border-sky-500/20';
+	const webSearchBadgeClass = `${featureBadgeBaseClass} px-2.5 py-1.5 gap-1.5`;
+	const compactFeatureBadgeClass = `${featureBadgeBaseClass} px-1.5 py-1.5 gap-1`;
+	const featureBadgeLabelClass =
+		'whitespace-nowrap text-slate-600 dark:text-slate-200 text-xs font-medium leading-none';
+	const featureBadgeIconSlotClass = 'relative flex size-4 items-center justify-center';
+	const featureBadgePrimaryIconMotionClass =
+		'transition-all duration-200 ease-out group-hover:scale-75 group-hover:opacity-0 group-focus:scale-75 group-focus:opacity-0';
+	const featureBadgeCloseIconMotionClass =
+		'absolute inset-0 m-auto size-3 scale-75 opacity-0 transition-all duration-200 ease-out group-hover:scale-100 group-hover:opacity-100 group-focus:scale-100 group-focus:opacity-100';
+	const webSearchIconClass = 'size-4 text-sky-500 dark:text-sky-300';
+	const imageGenerationIconClass = 'size-4 text-teal-500 dark:text-teal-300';
+	const codeInterpreterIconClass = 'size-4 text-violet-500 dark:text-violet-300';
+	const webSearchCloseIconClass = `${featureBadgeCloseIconMotionClass} text-sky-600 dark:text-sky-300`;
+	const imageGenerationCloseIconClass = `${featureBadgeCloseIconMotionClass} text-teal-600 dark:text-teal-300`;
+	const codeInterpreterCloseIconClass = `${featureBadgeCloseIconMotionClass} text-violet-600 dark:text-violet-300`;
 
 	let showTools = false;
 
@@ -1119,12 +1143,12 @@
 
 								<div class=" flex justify-between mt-1.5 mb-3 mx-0.5 max-w-full" dir="ltr">
 									<div class="ml-1 self-end flex items-center flex-1 max-w-[80%] gap-0.5">
-												<InputMenu
-													bind:selectedToolIds
-													bind:webSearchMode
-													{webSearchModeOptions}
-													bind:imageGenerationEnabled
-													bind:codeInterpreterEnabled
+														<InputMenu
+															bind:selectedToolIds
+															bind:webSearchMode
+															{webSearchModeOptions}
+															bind:imageGenerationEnabled
+															bind:codeInterpreterEnabled
 											{screenCaptureHandler}
 											{inputFilesHandler}
 											uploadFilesHandler={() => {
@@ -1215,36 +1239,69 @@
 											{/if}
 
 											{#if $_user}
-												{#if $config?.features?.enable_web_search && ($_user.role === 'admin' || $_user?.permissions?.features?.web_search) && webSearchActive}
-													<Tooltip content={`Web Search · ${currentWebSearchModeLabel}`} placement="top">
-														<div
-															class="rounded-full px-2 py-1.5 bg-gray-100/70 dark:bg-gray-800/60 flex items-center gap-1.5 {getWebSearchBadgeClass(normalizedWebSearchMode)}"
+													{#if webSearchFeatureEnabled && ($_user.role === 'admin' || $_user?.permissions?.features?.web_search) && webSearchActive}
+													<Tooltip content={`${currentWebSearchTooltip}，点击关闭`} placement="top">
+														<button
+															type="button"
+															class={webSearchBadgeClass}
+															aria-label={$i18n.t('关闭联网搜索')}
+															on:click={() => {
+																webSearchMode = 'off';
+															}}
 														>
-															<GlobeAlt className="size-5" strokeWidth="1.75" />
-															<span class="text-xs font-medium leading-none">
-																{currentWebSearchModeLabel}
+															<span class={featureBadgeIconSlotClass}>
+																<GlobeAlt
+																	className={`${webSearchIconClass} ${featureBadgePrimaryIconMotionClass}`}
+																	strokeWidth="1.75"
+																/>
+																<XMark className={webSearchCloseIconClass} strokeWidth="2.5" />
 															</span>
-														</div>
+															<span class={featureBadgeLabelClass}>
+																{currentWebSearchBadgeLabel}
+															</span>
+														</button>
 													</Tooltip>
 												{/if}
 
 												{#if $config?.features?.enable_image_generation && ($_user.role === 'admin' || $_user?.permissions?.features?.image_generation) && imageGenerationEnabled}
-													<Tooltip content={$i18n.t('Image')} placement="top">
-														<div
-															class="rounded-full p-1.5 bg-gray-100/70 dark:bg-gray-800/60 text-emerald-500 dark:text-emerald-400"
+													<Tooltip content={$i18n.t('已开启AI绘图，点击关闭')} placement="top">
+														<button
+															type="button"
+															class={compactFeatureBadgeClass}
+															aria-label={$i18n.t('关闭AI绘图')}
+															on:click={() => {
+																imageGenerationEnabled = false;
+															}}
 														>
-															<Photo className="size-5" strokeWidth="1.75" />
-														</div>
+															<span class={featureBadgeIconSlotClass}>
+																<Photo
+																	className={`${imageGenerationIconClass} ${featureBadgePrimaryIconMotionClass}`}
+																	strokeWidth="1.75"
+																/>
+																<XMark className={imageGenerationCloseIconClass} strokeWidth="2.5" />
+															</span>
+														</button>
 													</Tooltip>
 												{/if}
 
 												{#if $config?.features?.enable_code_interpreter && ($_user.role === 'admin' || $_user?.permissions?.features?.code_interpreter) && codeInterpreterEnabled}
-													<Tooltip content={$i18n.t('Code Interpreter')} placement="top">
-														<div
-															class="rounded-full p-1.5 bg-gray-100/70 dark:bg-gray-800/60 text-amber-500 dark:text-amber-400"
+													<Tooltip content={$i18n.t('已开启代码解释器，点击关闭')} placement="top">
+														<button
+															type="button"
+															class={compactFeatureBadgeClass}
+															aria-label={$i18n.t('关闭代码解释器')}
+															on:click={() => {
+																codeInterpreterEnabled = false;
+															}}
 														>
-															<CommandLine className="size-5" strokeWidth="1.75" />
-														</div>
+															<span class={featureBadgeIconSlotClass}>
+																<CommandLine
+																	className={`${codeInterpreterIconClass} ${featureBadgePrimaryIconMotionClass}`}
+																	strokeWidth="1.75"
+																/>
+																<XMark className={codeInterpreterCloseIconClass} strokeWidth="2.5" />
+															</span>
+														</button>
 													</Tooltip>
 												{/if}
 											{/if}

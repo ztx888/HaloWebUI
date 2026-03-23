@@ -1325,26 +1325,17 @@
 				params = chatContent?.params ?? {};
 				chatFiles = chatContent?.files ?? [];
 
-				autoScroll = true;
-				await tick();
-
-				if (history.currentId) {
-					for (const message of Object.values(history.messages)) {
-						if (message.role === 'assistant') {
-							message.done = true;
-						}
-					}
-				}
-
 				const taskRes = await getTaskIdsByChatId(localStorage.token, $chatId).catch((error) => {
 					return null;
 				});
 
 				if (navigationId !== chatIdProp) return null;
 
-				if (taskRes) {
-					taskIds = taskRes.task_ids;
-				}
+				taskIds = taskRes?.task_ids ?? [];
+				reconcileLoadedAssistantMessages(taskIds);
+
+				autoScroll = true;
+				await tick();
 
 				await tick();
 
@@ -1353,6 +1344,67 @@
 				return null;
 			}
 		}
+	};
+
+	const reconcileLoadedAssistantMessages = (activeTaskIds: string[] | null) => {
+		const hasPendingTask = Array.isArray(activeTaskIds) && activeTaskIds.length > 0;
+		const pendingAssistantIds = new Set<string>();
+
+		if (hasPendingTask) {
+			for (const [messageId, message] of Object.entries(history.messages)) {
+				if (message?.role === 'assistant' && message.done === false) {
+					pendingAssistantIds.add(messageId);
+				}
+			}
+
+			const currentMessage = history.currentId ? history.messages[history.currentId] : null;
+			if (currentMessage?.role === 'assistant') {
+				pendingAssistantIds.add(currentMessage.id);
+
+				const parentMessage = currentMessage.parentId
+					? history.messages[currentMessage.parentId]
+					: null;
+				for (const siblingId of parentMessage?.childrenIds ?? []) {
+					const sibling = history.messages[siblingId];
+					if (sibling?.role === 'assistant' && sibling.done !== true) {
+						pendingAssistantIds.add(siblingId);
+					}
+				}
+			}
+
+			if (pendingAssistantIds.size === 0) {
+				const latestAssistantEntry = Object.entries(history.messages)
+					.filter(([, message]) => message?.role === 'assistant')
+					.sort(([, a], [, b]) => (a?.timestamp ?? 0) - (b?.timestamp ?? 0))
+					.at(-1);
+
+				if (latestAssistantEntry) {
+					pendingAssistantIds.add(latestAssistantEntry[0]);
+				}
+			}
+		}
+
+		for (const [messageId, message] of Object.entries(history.messages)) {
+			if (message?.role !== 'assistant') {
+				continue;
+			}
+
+			if (hasPendingTask && pendingAssistantIds.has(messageId)) {
+				message.done = false;
+			} else {
+				message.done = true;
+			}
+		}
+
+		activeChatIds.update((ids) => {
+			const next = new Set(ids);
+			if (hasPendingTask && $chatId) {
+				next.add($chatId);
+			} else {
+				next.delete($chatId);
+			}
+			return next;
+		});
 	};
 
 	let _scrollRafPending = false;
@@ -2334,8 +2386,269 @@
 		scrollToBottom();
 	};
 
+	const extractOpenAIErrorMessage = (innerError) => {
+		if (!innerError) {
+			return '';
+		}
+
+		if (typeof innerError === 'string') {
+			return innerError;
+		}
+
+		if (typeof innerError === 'object') {
+			if ('detail' in innerError && typeof innerError.detail === 'string') {
+				return innerError.detail;
+			}
+
+			if ('error' in innerError) {
+				if (
+					typeof innerError.error === 'object' &&
+					innerError.error !== null &&
+					'message' in innerError.error &&
+					typeof innerError.error.message === 'string'
+				) {
+					return innerError.error.message;
+				}
+
+				if (typeof innerError.error === 'string') {
+					return innerError.error;
+				}
+			}
+
+			if ('message' in innerError && typeof innerError.message === 'string') {
+				return innerError.message;
+			}
+		}
+
+		try {
+			return JSON.stringify(innerError);
+		} catch {
+			return String(innerError);
+		}
+	};
+
+	const REQUEST_INCOMPATIBLE_PATTERNS = [
+		'unknown parameter',
+		'unsupported parameter',
+		'unsupported value',
+		'unsupported type',
+		'invalid value',
+		'invalid_request_error',
+		'schema',
+		'not supported',
+		'not support',
+		'unexpected field',
+		'extra fields',
+		'tool_choice',
+		'stream_options',
+		'response_format',
+		'input_image',
+		'input_file',
+		'messages[',
+		'tools['
+	];
+
+	const extractOpenAIErrorStatus = (errorMessage: string): number | null => {
+		const message = `${errorMessage ?? ''}`;
+		const patterns = [
+			/Responses API upstream error \((\d{3})\)/i,
+			/\bHTTP\s*(\d{3})\b/i,
+			/\bstatus\s*[:=]\s*(\d{3})\b/i
+		];
+
+		for (const pattern of patterns) {
+			const match = message.match(pattern);
+			if (!match) {
+				continue;
+			}
+
+			const status = Number.parseInt(match[1], 10);
+			if (Number.isFinite(status) && status >= 400) {
+				return status;
+			}
+		}
+
+		return null;
+	};
+
+	const inferOpenAIErrorFamily = (status: number | null, errorMessage: string): string => {
+		const message = `${errorMessage ?? ''}`.toLowerCase();
+
+		if (status === 401 || status === 403) {
+			return 'auth_error';
+		}
+		if (status === 404) {
+			return 'model_not_found';
+		}
+		if (status === 429) {
+			return 'rate_limited';
+		}
+		if (status === 408 || status === 504) {
+			return 'timeout';
+		}
+		if (status === 400) {
+			return 'request_incompatible';
+		}
+		if (status !== null && status >= 500) {
+			return 'upstream_service_error';
+		}
+		if (REQUEST_INCOMPATIBLE_PATTERNS.some((pattern) => message.includes(pattern))) {
+			return 'request_incompatible';
+		}
+		return 'upstream_service_error';
+	};
+
+	const extractOpenAIErrorEvidence = (errorMessage: string) => {
+		const message = `${errorMessage ?? ''}`;
+		const lowerMessage = message.toLowerCase();
+
+		const interfaceHint =
+			lowerMessage.includes('responses api') || lowerMessage.includes('/responses')
+				? 'Responses API'
+				: lowerMessage.includes('chat completions') || lowerMessage.includes('/chat/completions')
+					? 'Chat Completions API'
+					: lowerMessage.includes('embeddings') || lowerMessage.includes('/embeddings')
+						? 'Embeddings API'
+						: '';
+
+		const host = message.match(/\bfrom\s+([a-z0-9.-]+\.[a-z]{2,})(?::\d+)?\b/i)?.[1] ?? '';
+		const parameter =
+			message.match(/Unknown parameter:\s*['"]([^'"]+)['"]/i)?.[1] ??
+			message.match(/['"]param['"]\s*:\s*['"]([^'"]+)['"]/i)?.[1] ??
+			message.match(/\bparameter\s*[:=]?\s*['"]([^'"]+)['"]/i)?.[1] ??
+			'';
+		const code =
+			message.match(/['"]code['"]\s*:\s*['"]([^'"]+)['"]/i)?.[1] ??
+			message.match(/\berror code\s*[:=]?\s*([a-z0-9_.-]+)\b/i)?.[1] ??
+			'';
+
+		return {
+			...(interfaceHint ? { interface: interfaceHint } : {}),
+			...(host ? { host } : {}),
+			...(parameter ? { parameter } : {}),
+			...(code ? { code } : {})
+		};
+	};
+
+	const buildOpenAIErrorReasons = (family: string, status: number | null): string[] => {
+		if (family === 'request_incompatible') {
+			return [
+				'api_request_interface_mismatch',
+				'api_request_model_mismatch',
+				'api_request_feature_not_supported',
+				'api_proxy_schema_mismatch'
+			];
+		}
+		if (family === 'auth_error') {
+			return ['api_auth_error'];
+		}
+		if (family === 'model_not_found') {
+			return ['api_model_not_found'];
+		}
+		if (family === 'rate_limited') {
+			return ['api_rate_limit', 'api_quota_exceeded'];
+		}
+		if (family === 'timeout') {
+			return ['api_request_timeout'];
+		}
+		if (status === 500) {
+			return ['api_server_error', 'proxy_error'];
+		}
+		return ['api_upstream_error', 'proxy_error'];
+	};
+
+	const buildOpenAIErrorSuggestion = (family: string, status: number | null): string => {
+		if (family === 'request_incompatible') {
+			return 'check_request_compatibility';
+		}
+		if (family === 'auth_error') {
+			return 'check_api_key';
+		}
+		if (family === 'rate_limited' || family === 'timeout') {
+			return 'wait_retry';
+		}
+		if (family === 'upstream_service_error' && status !== null && status >= 500) {
+			return status === 500 ? 'retry_or_switch' : 'wait_retry';
+		}
+		return 'retry_or_switch';
+	};
+
+	const buildOpenAIErrorTitle = (family: string, status: number | null): string => {
+		const statusValue = status ?? 'unknown';
+		switch (family) {
+			case 'request_incompatible':
+				return status
+					? $i18n.t('error.title.request_incompatible', { status: statusValue })
+					: $i18n.t('error.title.request_incompatible_no_status');
+			case 'auth_error':
+				return status
+					? $i18n.t('error.title.auth_error', { status: statusValue })
+					: $i18n.t('error.title.auth_error_no_status');
+			case 'model_not_found':
+				return status
+					? $i18n.t('error.title.model_not_found', { status: statusValue })
+					: $i18n.t('error.title.model_not_found_no_status');
+			case 'rate_limited':
+				return status
+					? $i18n.t('error.title.rate_limited', { status: statusValue })
+					: $i18n.t('error.title.rate_limited_no_status');
+			case 'timeout':
+				return status
+					? $i18n.t('error.title.timeout', { status: statusValue })
+					: $i18n.t('error.title.timeout_no_status');
+			default:
+				return status
+					? $i18n.t('error.title.upstream_service_error', { status: statusValue })
+					: $i18n.t('error.title.upstream_service_error_no_status');
+		}
+	};
+
+	const buildOpenAIErrorBody = (
+		family: string,
+		evidence: { interface?: string; host?: string; parameter?: string; code?: string }
+	): string => {
+		const lines = [$i18n.t(`error.body.${family}`)];
+		if (evidence.interface) {
+			lines.push($i18n.t('error.evidence.interface', { value: evidence.interface }));
+		}
+		if (evidence.parameter) {
+			lines.push($i18n.t('error.evidence.parameter', { value: evidence.parameter }));
+		} else if (evidence.code) {
+			lines.push($i18n.t('error.evidence.code', { value: evidence.code }));
+		}
+		if (evidence.host && lines.length < 3) {
+			lines.push($i18n.t('error.evidence.host', { value: evidence.host }));
+		}
+		return lines.filter(Boolean).join('\n');
+	};
+
+	const buildLocalizedOpenAIError = (errorMessage: string) => {
+		const message = `${errorMessage ?? ''}`.trim();
+		if (!message) {
+			return null;
+		}
+
+		const status = extractOpenAIErrorStatus(message);
+		const family = inferOpenAIErrorFamily(status, message);
+		const evidence = extractOpenAIErrorEvidence(message);
+		const title = buildOpenAIErrorTitle(family, status);
+		const body = buildOpenAIErrorBody(family, evidence);
+
+		return {
+			type: 'api_error',
+			family,
+			status,
+			title,
+			body,
+			content: title,
+			reasons: buildOpenAIErrorReasons(family, status),
+			suggestion: buildOpenAIErrorSuggestion(family, status),
+			raw_message: message,
+			evidence
+		};
+	};
+
 	const handleOpenAIError = async (error, responseMessage) => {
-		let errorMessage = '';
 		let innerError;
 
 		if (error) {
@@ -2343,28 +2656,43 @@
 		}
 
 		console.error(innerError);
-		if ('detail' in innerError) {
-			// FastAPI error
-			toast.error(innerError.detail);
-			errorMessage = innerError.detail;
-		} else if ('error' in innerError) {
-			// OpenAI error
-			if ('message' in innerError.error) {
-				toast.error(innerError.error.message);
-				errorMessage = innerError.error.message;
-			} else {
-				toast.error(innerError.error);
-				errorMessage = innerError.error;
+
+		if (
+			innerError &&
+			typeof innerError === 'object' &&
+			innerError.type === 'api_error' &&
+			('title' in innerError || 'content' in innerError)
+		) {
+			toast.error(`${innerError.title ?? innerError.content ?? $i18n.t('error.title.upstream_service_error_no_status')}`);
+			responseMessage.error = innerError;
+			responseMessage.done = true;
+
+			if (responseMessage.statusHistory) {
+				responseMessage.statusHistory = responseMessage.statusHistory.filter(
+					(status) => status.action !== 'knowledge_search'
+				);
 			}
-		} else if ('message' in innerError) {
-			// OpenAI error
-			toast.error(innerError.message);
-			errorMessage = innerError.message;
+
+			history.messages[responseMessage.id] = responseMessage;
+			return;
 		}
 
-		responseMessage.error = {
-			content: $i18n.t(`Uh-oh! There was an issue with the response.`) + '\n' + errorMessage
-		};
+		const errorMessage = extractOpenAIErrorMessage(innerError);
+		const localizedError = buildLocalizedOpenAIError(errorMessage);
+
+		if (localizedError) {
+			toast.error(localizedError.content.split('\n')[0]);
+			responseMessage.error = localizedError;
+		} else {
+			if (errorMessage) {
+				toast.error(errorMessage);
+			}
+
+			responseMessage.error = {
+				content: $i18n.t(`Uh-oh! There was an issue with the response.`) + '\n' + errorMessage
+			};
+		}
+
 		responseMessage.done = true;
 
 		if (responseMessage.statusHistory) {

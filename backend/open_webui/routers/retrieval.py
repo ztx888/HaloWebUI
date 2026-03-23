@@ -62,138 +62,34 @@ from open_webui.retrieval.web.grok import search_grok
 from open_webui.retrieval.web.sougou import search_sougou
 
 from open_webui.retrieval.utils import (
-    get_embedding_function,
-    get_model_path,
     query_collection,
     query_collection_with_hybrid_search,
     query_doc,
     query_doc_with_hybrid_search,
 )
+from open_webui.retrieval.runtime import (
+    ensure_reranking_runtime,
+    get_runtime_capabilities,
+    reset_embedding_runtime,
+    reset_reranking_runtime,
+)
 from open_webui.utils.misc import (
     calculate_sha256_string,
 )
 from open_webui.utils.auth import get_admin_user, get_verified_user
-from open_webui.utils.optional_dependencies import require_module
 
 from open_webui.config import (
     ENV,
-    RAG_EMBEDDING_MODEL_AUTO_UPDATE,
-    RAG_EMBEDDING_MODEL_TRUST_REMOTE_CODE,
-    RAG_RERANKING_ENGINE,
-    RAG_RERANKING_API_BASE_URL,
-    RAG_RERANKING_API_KEY,
-    RAG_RERANKING_MODEL_AUTO_UPDATE,
-    RAG_RERANKING_MODEL_TRUST_REMOTE_CODE,
     UPLOAD_DIR,
     DEFAULT_LOCALE,
     RAG_EMBEDDING_CONTENT_PREFIX,
     RAG_EMBEDDING_QUERY_PREFIX,
 )
-from open_webui.env import (
-    SRC_LOG_LEVELS,
-    DEVICE_TYPE,
-    DOCKER,
-)
+from open_webui.env import SRC_LOG_LEVELS
 from open_webui.constants import ERROR_MESSAGES
 
 log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["RAG"])
-
-##########################################
-#
-# Utility functions
-#
-##########################################
-
-
-def get_ef(
-    engine: str,
-    embedding_model: str,
-    auto_update: bool = False,
-):
-    ef = None
-    if embedding_model and engine == "":
-        sentence_transformers = require_module(
-            "sentence_transformers",
-            feature="Local embedding models",
-            packages=["sentence-transformers", "transformers", "accelerate"],
-            install_profiles=["rag-local", "local-rag", "full"],
-        )
-
-        try:
-            ef = sentence_transformers.SentenceTransformer(
-                get_model_path(embedding_model, auto_update),
-                device=DEVICE_TYPE,
-                trust_remote_code=RAG_EMBEDDING_MODEL_TRUST_REMOTE_CODE,
-            )
-        except Exception as e:
-            log.debug(f"Error loading SentenceTransformer: {e}")
-
-    return ef
-
-
-def get_rf(
-    reranking_engine: str = "local",
-    reranking_model: Optional[str] = None,
-    api_base_url: Optional[str] = None,
-    api_key: Optional[str] = None,
-    auto_update: bool = False,
-):
-    rf = None
-    if reranking_model:
-        if reranking_engine == "jina":
-            if not api_base_url:
-                raise ValueError(
-                    "RAG_RERANKING_API_BASE_URL is required when RAG_RERANKING_ENGINE=jina."
-                )
-            from open_webui.retrieval.models.jina import JinaReranker
-
-            rf = JinaReranker(
-                model=reranking_model,
-                api_base_url=api_base_url,
-                api_key=api_key,
-            )
-        elif reranking_engine in ["", "local"] and any(
-            model in reranking_model for model in ["jinaai/jina-colbert-v2"]
-        ):
-            require_module(
-                "colbert",
-                feature="Local ColBERT reranking",
-                packages=["colbert-ai"],
-                install_profiles=["rerank-local", "local-rag", "full"],
-            )
-            try:
-                from open_webui.retrieval.models.colbert import ColBERT
-
-                rf = ColBERT(
-                    get_model_path(reranking_model, auto_update),
-                    env="docker" if DOCKER else None,
-                )
-
-            except Exception as e:
-                log.error(f"ColBERT: {e}")
-                raise Exception(ERROR_MESSAGES.DEFAULT(e))
-        elif reranking_engine in ["", "local"]:
-            sentence_transformers = require_module(
-                "sentence_transformers",
-                feature="Local reranking models",
-                packages=["sentence-transformers", "transformers", "accelerate"],
-                install_profiles=["rerank-local", "local-rag", "full"],
-            )
-
-            try:
-                rf = sentence_transformers.CrossEncoder(
-                    get_model_path(reranking_model, auto_update),
-                    device=DEVICE_TYPE,
-                    trust_remote_code=RAG_RERANKING_MODEL_TRUST_REMOTE_CODE,
-                )
-            except Exception as e:
-                log.error(f"CrossEncoder: {e}")
-                raise Exception(ERROR_MESSAGES.DEFAULT("CrossEncoder error"))
-        else:
-            raise ValueError(f"Unsupported reranking engine: {reranking_engine}")
-    return rf
-
 
 ##########################################
 #
@@ -319,27 +215,7 @@ async def update_embedding_config(
                 form_data.embedding_batch_size
             )
 
-        request.app.state.ef = get_ef(
-            request.app.state.config.RAG_EMBEDDING_ENGINE,
-            request.app.state.config.RAG_EMBEDDING_MODEL,
-        )
-
-        request.app.state.EMBEDDING_FUNCTION = get_embedding_function(
-            request.app.state.config.RAG_EMBEDDING_ENGINE,
-            request.app.state.config.RAG_EMBEDDING_MODEL,
-            request.app.state.ef,
-            (
-                request.app.state.config.RAG_OPENAI_API_BASE_URL
-                if request.app.state.config.RAG_EMBEDDING_ENGINE == "openai"
-                else request.app.state.config.RAG_OLLAMA_BASE_URL
-            ),
-            (
-                request.app.state.config.RAG_OPENAI_API_KEY
-                if request.app.state.config.RAG_EMBEDDING_ENGINE == "openai"
-                else request.app.state.config.RAG_OLLAMA_API_KEY
-            ),
-            request.app.state.config.RAG_EMBEDDING_BATCH_SIZE,
-        )
+        reset_embedding_runtime(request.app)
 
         return {
             "status": True,
@@ -389,17 +265,7 @@ async def update_reranking_config(
             )
             request.app.state.config.RAG_RERANKING_API_KEY = form_data.api_config.key
 
-        try:
-            request.app.state.rf = get_rf(
-                request.app.state.config.RAG_RERANKING_ENGINE,
-                request.app.state.config.RAG_RERANKING_MODEL,
-                request.app.state.config.RAG_RERANKING_API_BASE_URL,
-                request.app.state.config.RAG_RERANKING_API_KEY,
-                True,
-            )
-        except Exception as e:
-            log.error(f"Error loading reranking model: {e}")
-            request.app.state.config.ENABLE_RAG_HYBRID_SEARCH = False
+        reset_reranking_runtime(request.app)
 
         return {
             "status": True,
@@ -422,6 +288,7 @@ async def update_reranking_config(
 async def get_rag_config(request: Request, user=Depends(get_admin_user)):
     return {
         "status": True,
+        "capabilities": get_runtime_capabilities(),
         # RAG settings
         "RAG_TEMPLATE": request.app.state.config.RAG_TEMPLATE,
         "RAG_SYSTEM_CONTEXT": request.app.state.config.RAG_SYSTEM_CONTEXT,
@@ -641,7 +508,7 @@ async def update_rag_config(
     )
     # Free up memory if hybrid search is disabled
     if not request.app.state.config.ENABLE_RAG_HYBRID_SEARCH:
-        request.app.state.rf = None
+        reset_reranking_runtime(request.app)
 
     request.app.state.config.RAG_HYBRID_SEARCH_BM25_WEIGHT = (
         form_data.RAG_HYBRID_SEARCH_BM25_WEIGHT
@@ -1124,24 +991,7 @@ def save_docs_to_vector_db(
                 return True
 
         log.info(f"adding to collection {collection_name}")
-        embedding_function = get_embedding_function(
-            request.app.state.config.RAG_EMBEDDING_ENGINE,
-            request.app.state.config.RAG_EMBEDDING_MODEL,
-            request.app.state.ef,
-            (
-                request.app.state.config.RAG_OPENAI_API_BASE_URL
-                if request.app.state.config.RAG_EMBEDDING_ENGINE == "openai"
-                else request.app.state.config.RAG_OLLAMA_BASE_URL
-            ),
-            (
-                request.app.state.config.RAG_OPENAI_API_KEY
-                if request.app.state.config.RAG_EMBEDDING_ENGINE == "openai"
-                else request.app.state.config.RAG_OLLAMA_API_KEY
-            ),
-            request.app.state.config.RAG_EMBEDDING_BATCH_SIZE,
-        )
-
-        embeddings = embedding_function(
+        embeddings = request.app.state.EMBEDDING_FUNCTION(
             list(map(lambda x: x.replace("\n", " "), texts)),
             prefix=RAG_EMBEDDING_CONTENT_PREFIX,
             user=user,
@@ -1874,6 +1724,11 @@ def query_doc_handler(
     user=Depends(get_verified_user),
 ):
     try:
+        reranking_function = (
+            ensure_reranking_runtime(request.app)
+            if request.app.state.config.ENABLE_RAG_HYBRID_SEARCH
+            else None
+        )
         if request.app.state.config.ENABLE_RAG_HYBRID_SEARCH:
             collection_results = {}
             collection_results[form_data.collection_name] = VECTOR_DB_CLIENT.get(
@@ -1887,7 +1742,7 @@ def query_doc_handler(
                     query, prefix=prefix, user=user
                 ),
                 k=form_data.k if form_data.k else request.app.state.config.TOP_K,
-                reranking_function=request.app.state.rf,
+                reranking_function=reranking_function,
                 k_reranker=form_data.k_reranker
                 or request.app.state.config.TOP_K_RERANKER,
                 r=(
@@ -1931,6 +1786,11 @@ def query_collection_handler(
     user=Depends(get_verified_user),
 ):
     try:
+        reranking_function = (
+            ensure_reranking_runtime(request.app)
+            if request.app.state.config.ENABLE_RAG_HYBRID_SEARCH
+            else None
+        )
         if request.app.state.config.ENABLE_RAG_HYBRID_SEARCH:
             return query_collection_with_hybrid_search(
                 collection_names=form_data.collection_names,
@@ -1939,7 +1799,7 @@ def query_collection_handler(
                     query, prefix=prefix, user=user
                 ),
                 k=form_data.k if form_data.k else request.app.state.config.TOP_K,
-                reranking_function=request.app.state.rf,
+                reranking_function=reranking_function,
                 k_reranker=form_data.k_reranker
                 or request.app.state.config.TOP_K_RERANKER,
                 r=(

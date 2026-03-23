@@ -38,6 +38,14 @@
 	import { WEBUI_BASE_URL, WEBUI_HOSTNAME } from '$lib/constants';
 	import i18n, { initI18n, getLanguages, changeLanguage } from '$lib/i18n';
 	import { bestMatchingLanguage } from '$lib/utils';
+	import {
+		approvePyodideConsent,
+		canUsePyodideRuntime,
+		getPyodideDownloadSummary,
+		getPyodidePackagesForCode,
+		hasPyodideConsent,
+		usesRemotePyodideRuntime
+	} from '$lib/utils/browser-ai-assets';
 	import { localizeCommonError } from '$lib/utils/common-errors';
 	import { initScrollbarAutohide } from '$lib/utils/scrollbars';
 	import { setTextScale } from '$lib/utils/text-scale';
@@ -191,7 +199,7 @@
 	};
 
 	const executePythonAsWorker = async (id, code, cb) => {
-		if (!APP_ENABLE_PYODIDE) {
+		if (!canUsePyodideRuntime()) {
 			if (cb) {
 				cb({
 					stdout: null,
@@ -207,20 +215,23 @@
 		let stderr = null;
 
 		let executing = true;
-		let packages = [
-			code.includes('requests') ? 'requests' : null,
-			code.includes('bs4') ? 'beautifulsoup4' : null,
-			code.includes('numpy') ? 'numpy' : null,
-			code.includes('pandas') ? 'pandas' : null,
-			code.includes('matplotlib') ? 'matplotlib' : null,
-			code.includes('sklearn') ? 'scikit-learn' : null,
-			code.includes('scipy') ? 'scipy' : null,
-			code.includes('re') ? 'regex' : null,
-			code.includes('seaborn') ? 'seaborn' : null,
-			code.includes('sympy') ? 'sympy' : null,
-			code.includes('tiktoken') ? 'tiktoken' : null,
-			code.includes('pytz') ? 'pytz' : null
-		].filter(Boolean);
+		const packages = getPyodidePackagesForCode(code);
+
+		if (usesRemotePyodideRuntime() && !hasPyodideConsent()) {
+			const shouldContinue = window.confirm(getPyodideDownloadSummary(packages));
+			if (!shouldContinue) {
+				executing = false;
+				if (cb) {
+					cb({
+						stdout: null,
+						stderr: '已取消下载浏览器 Python 运行时。',
+						result: null
+					});
+				}
+				return;
+			}
+			approvePyodideConsent();
+		}
 
 		const { default: PyodideWorker } = await import('$lib/workers/pyodide.worker?worker');
 		const pyodideWorker = new PyodideWorker();

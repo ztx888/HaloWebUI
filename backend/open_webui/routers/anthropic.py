@@ -66,6 +66,34 @@ log.setLevel(SRC_LOG_LEVELS["OPENAI"])
 router = APIRouter()
 
 
+def _stringify_upstream_error_body(body: Any) -> str:
+    if body is None:
+        return ""
+    if isinstance(body, str):
+        return body
+    try:
+        return json.dumps(body, ensure_ascii=False, default=str)
+    except Exception:
+        return str(body)
+
+
+def _format_anthropic_upstream_error(
+    *, request_url: str, status: int, body: Any
+) -> str:
+    host = ""
+    try:
+        host = urlparse(request_url).hostname or ""
+    except Exception:
+        host = ""
+
+    body_text = _stringify_upstream_error_body(body).strip()
+    parts = [
+        f"Anthropic upstream error ({status}){f' from {host}' if host else ''}.",
+        (f"Upstream response: {body_text}" if body_text else ""),
+    ]
+    return "\n".join([part for part in parts if part])
+
+
 def _get_anthropic_user_config(connection_user: Optional[UserModel]) -> tuple[list[str], list[str], dict]:
     """
     Resolve Anthropic connection config for a given user.
@@ -1869,7 +1897,11 @@ async def generate_chat_completion(
                             log.warning(f"[ANTHROPIC DEBUG] ERROR {response.status}: {err_text[:500]}")
                             error_chunk = {
                                 "error": {
-                                    "message": err_text[:500],
+                                    "message": _format_anthropic_upstream_error(
+                                        request_url=actual_url,
+                                        status=response.status,
+                                        body=err_text,
+                                    ),
                                     "type": "api_error",
                                     "code": f"http_{response.status}",
                                 }
@@ -2074,9 +2106,14 @@ async def generate_chat_completion(
         async with _post_preserve_method(session, actual_url_ns, json_data=anthropic_payload, headers=headers) as response:
             data = await response.json(content_type=None)
             if response.status >= 400:
-                err = data.get("error") if isinstance(data, dict) else None
-                msg = err.get("message") if isinstance(err, dict) else None
-                raise HTTPException(status_code=response.status, detail=msg or str(data)[:500])
+                raise HTTPException(
+                    status_code=response.status,
+                    detail=_format_anthropic_upstream_error(
+                        request_url=actual_url_ns,
+                        status=response.status,
+                        body=data,
+                    ),
+                )
 
             return _anthropic_message_to_openai(
                 data,

@@ -16,6 +16,10 @@
 		type ModelCapabilities
 	} from '$lib/utils/model-capabilities';
 	import { getModelChatDisplayName } from '$lib/utils/model-display';
+	import {
+		describeNativeWebSearchSupport,
+		getNativeWebSearchSupport
+	} from '$lib/utils/native-web-search';
 
 	import Modal from '$lib/components/common/Modal.svelte';
 	import XMark from '$lib/components/icons/XMark.svelte';
@@ -46,7 +50,13 @@
 	let searchQuery = '';
 	let newModelId = '';
 	let loading = false;
-	let availableModels: Array<{ id: string; name?: string }> = [];
+	type AvailableModel = {
+		id: string;
+		name?: string;
+		native_web_search_supported?: boolean;
+		native_web_search_support?: Record<string, any>;
+	};
+	let availableModels: AvailableModel[] = [];
 	let serverModelListRequiresManualEntry = false;
 
 	const describeConnectionError = (error: unknown) => {
@@ -81,7 +91,7 @@
 		{ key: 'selected', label: '已选' },
 		{ key: 'reasoning', label: '推理' },
 		{ key: 'vision', label: '视觉' },
-		{ key: 'webSearch', label: '联网' },
+		{ key: 'webSearch', label: '原生联网' },
 		{ key: 'tools', label: '工具' },
 		{ key: 'free', label: '免费' },
 		{ key: 'imageGen', label: '生图' },
@@ -134,10 +144,12 @@
 					throw new Error('Gemini: Invalid response (expected models.list format)');
 				}
 
-				availableModels = (data.models || []).map((m: any) => ({
-					id: m.name?.replace('models/', '') || m.name,
-					name: m.displayName || m.name
-				}));
+					availableModels = (data.models || []).map((m: any) => ({
+						id: m.name?.replace('models/', '') || m.name,
+						name: m.displayName || m.name,
+						native_web_search_supported: m.native_web_search_supported,
+						native_web_search_support: m.native_web_search_support
+					}));
 			} else if (anthropic) {
 				data = await verifyAnthropicConnection(localStorage.token, {
 					url,
@@ -170,10 +182,12 @@
 						...(headers ? { headers } : {})
 					}
 				});
-				availableModels = (data?.data || []).map((m: any) => ({
-					id: m.id,
-					name: m.name || m.id
-				}));
+					availableModels = (data?.data || []).map((m: any) => ({
+						id: m.id,
+						name: m.name || m.id,
+						native_web_search_supported: m.native_web_search_supported,
+						native_web_search_support: m.native_web_search_support
+					}));
 
 				serverModelListRequiresManualEntry =
 					data?._openwebui?.manual_model_ids_required === true;
@@ -201,7 +215,21 @@
 		}
 	};
 
-	const toggleModel = (id: string) => {
+		const getNativeWebSearchTooltip = (model: AvailableModel) =>
+			describeNativeWebSearchSupport((key, options) => $i18n.t(key, options), getNativeWebSearchSupport(model));
+
+		const getNativeWebSearchIconClass = (model: AvailableModel) => {
+			const support = getNativeWebSearchSupport(model);
+			if (support.status === 'supported') {
+				return 'size-3.5 text-blue-500';
+			}
+			if (support.status === 'unknown') {
+				return 'size-3.5 text-amber-500';
+			}
+			return 'size-3.5 text-gray-400';
+		};
+
+		const toggleModel = (id: string) => {
 		const newSet = new Set(selectedIds);
 		if (newSet.has(id)) {
 			newSet.delete(id);
@@ -246,11 +274,19 @@
 		if (!matchesSearch) return false;
 
 		// 标签过滤
-		if (activeTag === 'all') return true;
-		if (activeTag === 'selected') return selectedIds.has(m.id);
-		const caps = inferModelCapabilities(m.id);
-		return caps[activeTag as keyof ModelCapabilities];
-	});
+			if (activeTag === 'all') return true;
+			if (activeTag === 'selected') return selectedIds.has(m.id);
+			if (activeTag === 'webSearch') {
+				if (
+					Object.prototype.hasOwnProperty.call(m ?? {}, 'native_web_search_support') ||
+					Object.prototype.hasOwnProperty.call(m ?? {}, 'native_web_search_supported')
+				) {
+					return getNativeWebSearchSupport(m).status !== 'unsupported';
+				}
+			}
+			const caps = inferModelCapabilities(m.id);
+			return caps[activeTag as keyof ModelCapabilities];
+		});
 
 	// 手动添加的模型（在selectedIds中但不在availableModels中）
 	$: customModels = Array.from(selectedIds).filter(
@@ -259,7 +295,7 @@
 
 	// 按分组组织模型
 	$: groupedModels = (() => {
-		const groups = new Map<string, Array<{ id: string; name?: string }>>();
+			const groups = new Map<string, AvailableModel[]>();
 		for (const model of filteredModels) {
 			const group = getModelGroup(model.id);
 			if (!groups.has(group)) {
@@ -461,11 +497,17 @@
 												<Wrench className="size-3.5 text-orange-500" />
 											</Tooltip>
 										{/if}
-										{#if caps.webSearch}
-											<Tooltip content={$i18n.t('Web Search')}>
-												<GlobeAlt className="size-3.5 text-blue-500" />
-											</Tooltip>
-										{/if}
+											{#if Object.prototype.hasOwnProperty.call(model ?? {}, 'native_web_search_support') || Object.prototype.hasOwnProperty.call(model ?? {}, 'native_web_search_supported')}
+												{#if getNativeWebSearchSupport(model).status !== 'unsupported'}
+													<Tooltip content={getNativeWebSearchTooltip(model)}>
+														<GlobeAlt className={getNativeWebSearchIconClass(model)} />
+													</Tooltip>
+												{/if}
+											{:else if caps.webSearch}
+												<Tooltip content={$i18n.t('Web Search')}>
+													<GlobeAlt className="size-3.5 text-blue-500" />
+												</Tooltip>
+											{/if}
 									</div>
 									{#if model.name && model.name !== model.id}
 										<Tooltip content={model.id}>

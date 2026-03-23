@@ -6,9 +6,6 @@
 	import fileSaver from 'file-saver';
 	const { saveAs } = fileSaver;
 
-	import jsPDF from 'jspdf';
-	import html2canvas from 'html2canvas-pro';
-
 	import { downloadChatAsPDF } from '$lib/apis/utils';
 	import { copyToClipboard, createMessagesList } from '$lib/utils';
 
@@ -81,6 +78,10 @@
 
 		if (containerElement) {
 			try {
+				const [{ default: jsPDF }, { default: html2canvas }] = await Promise.all([
+					import('jspdf'),
+					import('html2canvas-pro')
+				]);
 				const isDarkMode = document.documentElement.classList.contains('dark');
 
 				console.log('isDarkMode', isDarkMode);

@@ -19,7 +19,7 @@ async function loadPyodideAndPackages(packages: string[] = []) {
 	self.result = null;
 
 	self.pyodide = await loadPyodide({
-		indexURL: '/pyodide/',
+		indexURL: APP_PYODIDE_INDEX_URL,
 		stdout: (text) => {
 			console.log('Python output:', text);
 
@@ -79,7 +79,12 @@ self.onmessage = async (event) => {
 			self.pyodide.FS.writeFile('/mnt/uploads/' + filename, new Uint8Array(content));
 			self.postMessage({ type: 'uploadResult', filename, success: true });
 		} catch (e) {
-			self.postMessage({ type: 'uploadResult', filename, success: false, error: e.toString() });
+			self.postMessage({
+				type: 'uploadResult',
+				filename,
+				success: false,
+				error: e instanceof Error ? e.message : String(e)
+			});
 		}
 		return;
 	}
@@ -144,7 +149,7 @@ matplotlib.pyplot.show = show`);
 		// 	});
 		// });
 	} catch (error) {
-		self.stderr = error.toString();
+		self.stderr = error instanceof Error ? error.message : String(error);
 	}
 
 	self.postMessage({ id, result: self.result, stdout: self.stdout, stderr: self.stderr });
@@ -187,7 +192,7 @@ function processResult(result: any): any {
 		return JSON.stringify(result);
 	} catch (err) {
 		// In case something unexpected happens, we return a stringified fallback
-		return `[processResult error]: ${err.message || err.toString()}`;
+		return `[processResult error]: ${err instanceof Error ? err.message : String(err)}`;
 	}
 }
 

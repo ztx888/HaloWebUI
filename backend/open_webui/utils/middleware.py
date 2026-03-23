@@ -65,9 +65,11 @@ from open_webui.models.functions import Functions
 from open_webui.models.models import Models
 
 from open_webui.retrieval.utils import get_sources_from_files
+from open_webui.retrieval.runtime import ensure_reranking_runtime
 
 
 from open_webui.utils.chat import generate_chat_completion
+from open_webui.utils.native_web_search import build_native_web_search_support
 from open_webui.utils.task import (
     get_task_model_id,
     rag_template,
@@ -157,30 +159,79 @@ def _safe_json_loads(value: Any) -> Any:
 
 
 # ── API error payload builder ────────────────────────────────────────
-_API_ERROR_REASON_MAP: dict[int, tuple[list[str], str]] = {
-    400: (["api_bad_request"], "retry_or_switch"),
-    401: (["api_auth_error"], "check_api_key"),
-    403: (["api_auth_error"], "check_api_key"),
-    404: (["api_model_not_found"], "retry_or_switch"),
-    408: (["api_request_timeout"], "wait_retry"),
-    429: (["api_rate_limit", "api_quota_exceeded"], "wait_retry"),
-    500: (["api_server_error", "proxy_error", "api_unsupported_params", "api_context_too_long"], "retry_or_switch"),
-    502: (["api_upstream_error", "proxy_error"], "wait_retry"),
-    503: (["api_upstream_error", "proxy_error"], "wait_retry"),
-    504: (["api_upstream_error", "proxy_error"], "wait_retry"),
+_REQUEST_INCOMPATIBLE_PATTERNS = (
+    "unknown parameter",
+    "unsupported parameter",
+    "unsupported value",
+    "unsupported type",
+    "invalid value",
+    "invalid_request_error",
+    "schema",
+    "not supported",
+    "not support",
+    "unexpected field",
+    "extra fields",
+    "tool_choice",
+    "stream_options",
+    "response_format",
+    "input_image",
+    "input_file",
+    "messages[",
+    "tools[",
+)
+
+_API_ERROR_FAMILY_CONFIG: dict[str, dict[str, Any]] = {
+    "request_incompatible": {
+        "reasons": [
+            "api_request_interface_mismatch",
+            "api_request_model_mismatch",
+            "api_request_feature_not_supported",
+            "api_proxy_schema_mismatch",
+        ],
+        "suggestion": "check_request_compatibility",
+    },
+    "auth_error": {
+        "reasons": ["api_auth_error"],
+        "suggestion": "check_api_key",
+    },
+    "model_not_found": {
+        "reasons": ["api_model_not_found"],
+        "suggestion": "retry_or_switch",
+    },
+    "rate_limited": {
+        "reasons": ["api_rate_limit", "api_quota_exceeded"],
+        "suggestion": "wait_retry",
+    },
+    "timeout": {
+        "reasons": ["api_request_timeout"],
+        "suggestion": "wait_retry",
+    },
+    "upstream_service_error": {
+        "reasons": ["api_upstream_error", "proxy_error"],
+        "suggestion": "wait_retry",
+    },
 }
 
-_API_ERROR_TITLE_MAP: dict[int, str] = {
-    401: "上游服务鉴权失败",
-    403: "上游服务拒绝访问",
-    404: "上游模型或接口不存在",
-    408: "上游服务请求超时",
-    429: "上游服务限流",
-    500: "上游服务暂时不可用",
-    502: "上游网关或代理错误",
-    503: "上游服务暂时不可用",
-    504: "上游服务响应超时",
-}
+_API_ERROR_STATUS_RE = (
+    re.compile(r"Responses API upstream error \((\d{3})\)", re.IGNORECASE),
+    re.compile(r"\bHTTP\s*(\d{3})\b", re.IGNORECASE),
+    re.compile(r"\bstatus\s*[:=]\s*(\d{3})\b", re.IGNORECASE),
+)
+
+_API_ERROR_HOST_RE = re.compile(
+    r"\bfrom\s+([a-z0-9.-]+\.[a-z]{2,})(?::\d+)?\b", re.IGNORECASE
+)
+
+_API_ERROR_PARAM_RES = (
+    re.compile(r"Unknown parameter:\s*['\"]([^'\"]+)['\"]", re.IGNORECASE),
+    re.compile(r"['\"]param['\"]\s*:\s*['\"]([^'\"]+)['\"]", re.IGNORECASE),
+    re.compile(r"\bparameter\s*[:=]?\s*['\"]([^'\"]+)['\"]", re.IGNORECASE),
+)
+
+_API_ERROR_CODE_RES = (
+    re.compile(r"['\"]code['\"]\s*:\s*['\"]([^'\"]+)['\"]", re.IGNORECASE),
+    re.compile(r"\berror code\s*[:=]?\s*([a-z0-9_.-]+)\b", re.IGNORECASE),
+)
 
 
 def _parse_error_message(raw: str) -> str:
@@ -202,6 +253,204 @@ def _parse_error_message(raw: str) -> str:
     except (json.JSONDecodeError, TypeError):
         pass
     return raw
+
+
+def _extract_api_error_status_from_code(code: Any) -> int | None:
+    if not isinstance(code, str):
+        return None
+    if not code.startswith("http_"):
+        return None
+    try:
+        status = int(code[5:])
+    except ValueError:
+        return None
+    return status if status >= 400 else None
+
+
+def _extract_api_error_status_from_text(raw: str) -> int | None:
+    if not raw:
+        return None
+
+    for pattern in _API_ERROR_STATUS_RE:
+        match = pattern.search(raw)
+        if not match:
+            continue
+        try:
+            status = int(match.group(1))
+        except (TypeError, ValueError):
+            continue
+        if status >= 400:
+            return status
+    return None
+
+
+def _resolve_api_error_status(
+    error_payload: dict,
+    *,
+    raw_message: str,
+    status_override: int | None = None,
+) -> int | None:
+    raw_status = error_payload.get("status")
+    if isinstance(raw_status, int) and raw_status >= 400:
+        return raw_status
+
+    code_status = _extract_api_error_status_from_code(error_payload.get("code"))
+    if code_status is not None:
+        return code_status
+
+    text_status = _extract_api_error_status_from_text(raw_message)
+    if text_status is not None:
+        return text_status
+
+    if isinstance(status_override, int) and status_override >= 400:
+        return status_override
+
+    return None
+
+
+def _classify_api_error_family(*, status: int | None, raw_message: str) -> str:
+    text = (raw_message or "").lower()
+
+    if status in {401, 403}:
+        return "auth_error"
+    if status == 404:
+        return "model_not_found"
+    if status == 429:
+        return "rate_limited"
+    if status in {408, 504}:
+        return "timeout"
+    if status == 400:
+        return "request_incompatible"
+    if status is not None and 500 <= status <= 599:
+        return "upstream_service_error"
+    if any(pattern in text for pattern in _REQUEST_INCOMPATIBLE_PATTERNS):
+        return "request_incompatible"
+    return "upstream_service_error"
+
+
+def _extract_api_error_interface_hint(raw_message: str) -> str | None:
+    text = (raw_message or "").lower()
+    if "responses api" in text or "/responses" in text:
+        return "Responses API"
+    if "chat completions" in text or "/chat/completions" in text:
+        return "Chat Completions API"
+    if "embeddings" in text or "/embeddings" in text:
+        return "Embeddings API"
+    return None
+
+
+def _extract_api_error_host_hint(raw_message: str) -> str | None:
+    if not raw_message:
+        return None
+    match = _API_ERROR_HOST_RE.search(raw_message)
+    return match.group(1) if match else None
+
+
+def _extract_api_error_param_hint(raw_message: str) -> str | None:
+    if not raw_message:
+        return None
+    for pattern in _API_ERROR_PARAM_RES:
+        match = pattern.search(raw_message)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _extract_api_error_code_hint(raw_message: str) -> str | None:
+    if not raw_message:
+        return None
+    for pattern in _API_ERROR_CODE_RES:
+        match = pattern.search(raw_message)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _build_api_error_title(*, family: str, status: int | None) -> str:
+    if family == "request_incompatible":
+        return (
+            f"携带参数与当前接口不兼容，请求被拒绝（HTTP {status}）"
+            if status
+            else "携带参数与当前接口不兼容，请求被拒绝"
+        )
+    if family == "auth_error":
+        return (
+            f"上游服务鉴权失败，请求被拒绝（HTTP {status}）"
+            if status
+            else "上游服务鉴权失败，请求被拒绝"
+        )
+    if family == "model_not_found":
+        return (
+            f"上游模型或接口不存在，请求失败（HTTP {status}）"
+            if status
+            else "上游模型或接口不存在，请求失败"
+        )
+    if family == "rate_limited":
+        return (
+            f"请求过于频繁，已被上游限流（HTTP {status}）"
+            if status
+            else "请求过于频繁，已被上游限流"
+        )
+    if family == "timeout":
+        return (
+            f"上游服务响应超时，请求失败（HTTP {status}）"
+            if status
+            else "上游服务响应超时，请求失败"
+        )
+    return (
+        f"上游服务返回错误，请求失败（HTTP {status}）"
+        if status
+        else "上游服务返回错误，请求失败"
+    )
+
+
+def _build_api_error_body(*, family: str, evidence: dict[str, str]) -> str:
+    summaries = {
+        "request_incompatible": "上游接口已拒绝这次请求。检测到这更像是请求字段、参数或调用方式与当前接口不兼容。",
+        "auth_error": "请求已发送到上游，但鉴权未通过。请检查 API Key、权限或连接配置。",
+        "model_not_found": "上游没有找到当前模型或目标接口。请检查模型名、连接配置，或确认该模型在上游可用。",
+        "rate_limited": "上游在短时间内拒绝了更多请求。通常与速率限制、额度或并发控制有关。",
+        "timeout": "请求已发出，但上游在限定时间内没有完成响应。",
+        "upstream_service_error": "上游服务返回了异常响应。问题可能来自上游服务本身、代理转发，或当前请求与上游能力不完全匹配。",
+    }
+
+    detail_lines: list[str] = []
+    interface_hint = evidence.get("interface")
+    parameter_hint = evidence.get("parameter")
+    host_hint = evidence.get("host")
+    code_hint = evidence.get("code")
+
+    if interface_hint:
+        detail_lines.append(f"接口线索：{interface_hint}")
+    if parameter_hint:
+        detail_lines.append(f"参数线索：{parameter_hint}")
+    elif code_hint:
+        detail_lines.append(f"错误代码：{code_hint}")
+    if host_hint and len(detail_lines) < 2:
+        detail_lines.append(f"上游服务：{host_hint}")
+
+    summary = summaries.get(family, summaries["upstream_service_error"])
+    return "\n".join([summary, *detail_lines]) if detail_lines else summary
+
+
+def _build_api_error_reasons_and_suggestion(
+    *, family: str, status: int | None
+) -> tuple[list[str], str]:
+    config = _API_ERROR_FAMILY_CONFIG.get(
+        family, _API_ERROR_FAMILY_CONFIG["upstream_service_error"]
+    )
+    reasons = list(config.get("reasons", []))
+    suggestion = str(config.get("suggestion", "retry_or_switch"))
+
+    if family == "upstream_service_error":
+        if status == 500:
+            reasons = ["api_server_error", "proxy_error"]
+            suggestion = "retry_or_switch"
+        elif status in {502, 503, 504}:
+            reasons = ["api_upstream_error", "proxy_error"]
+            suggestion = "wait_retry"
+
+    return reasons, suggestion
 
 
 def _normalize_api_error(error: Any, status_override: int | None = None) -> dict:
@@ -227,12 +476,15 @@ def _normalize_api_error(error: Any, status_override: int | None = None) -> dict
                 break
 
     if status_override is not None:
-        normalized.setdefault("status", status_override)
-        code_str = str(normalized.get("code", "") or "")
-        if not code_str.startswith("http_"):
-            if code_str:
-                normalized.setdefault("upstream_code", code_str)
-            normalized["code"] = f"http_{status_override}"
+        if status_override >= 400:
+            normalized.setdefault("status", status_override)
+            code_str = str(normalized.get("code", "") or "")
+            if not code_str.startswith("http_"):
+                if code_str:
+                    normalized.setdefault("upstream_code", code_str)
+                normalized["code"] = f"http_{status_override}"
+        else:
+            normalized.setdefault("transport_status", status_override)
 
     return normalized
 
@@ -366,23 +618,6 @@ def _normalize_web_search_mode(
     return fallback
 
 
-def _get_hostname(value: str) -> str:
-    try:
-        return (urlparse(value).hostname or "").strip().lower()
-    except Exception:
-        return ""
-
-
-def _is_official_openai_connection(url: str) -> bool:
-    host = _get_hostname(url)
-    return host == "api.openai.com" or host.endswith(".openai.com")
-
-
-def _is_official_gemini_connection(url: str) -> bool:
-    host = _get_hostname(url)
-    return host == "generativelanguage.googleapis.com"
-
-
 def _resolve_native_web_search_support(
     request: Request, user: UserModel, model: dict, model_id: str
 ) -> dict:
@@ -394,48 +629,74 @@ def _resolve_native_web_search_support(
     if provider == "openai":
         base_urls, keys, cfgs = _get_openai_user_config(connection_user)
         if not base_urls:
-            return {"provider": provider, "supported": False}
+            return {
+                "provider": provider,
+                "status": "unsupported",
+                "reason": "connection_not_found",
+                "source": "provider_resolution",
+                "supported": False,
+                "can_attempt": False,
+            }
 
         _idx, url, _key, api_config = _resolve_openai_connection_by_model_id(
             model_id, base_urls, keys, cfgs
         )
         if not url:
-            return {"provider": provider, "supported": False}
+            return {
+                "provider": provider,
+                "status": "unsupported",
+                "reason": "connection_not_found",
+                "source": "provider_resolution",
+                "supported": False,
+                "can_attempt": False,
+            }
 
-        official = _is_official_openai_connection(url)
-        explicit = api_config.get("native_web_search_enabled")
-        supported = bool(explicit) if isinstance(explicit, bool) else official
-        return {
-            "provider": provider,
-            "supported": supported,
-            "official": official,
-            "url": url,
-            "api_config": api_config,
-        }
+        support = build_native_web_search_support(
+            "openai",
+            url=url,
+            api_config=api_config,
+            connection_name=model.get("connection_name"),
+        )
+        support["url"] = url
+        support["api_config"] = api_config
+        return support
 
     if provider in {"google", "gemini"} or model.get("gemini") is not None:
         base_urls, keys, cfgs = _get_gemini_user_config(connection_user)
         if not base_urls:
-            return {"provider": "gemini", "supported": False}
+            return {
+                "provider": "gemini",
+                "status": "unsupported",
+                "reason": "connection_not_found",
+                "source": "provider_resolution",
+                "supported": False,
+                "can_attempt": False,
+            }
 
         _idx, url, _key, api_config = _resolve_gemini_connection_by_model_id(
             model_id, base_urls, keys, cfgs
         )
         if not url:
-            return {"provider": "gemini", "supported": False}
+            return {
+                "provider": "gemini",
+                "status": "unsupported",
+                "reason": "connection_not_found",
+                "source": "provider_resolution",
+                "supported": False,
+                "can_attempt": False,
+            }
 
-        official = _is_official_gemini_connection(url)
-        explicit = api_config.get("native_web_search_enabled")
-        supported = bool(explicit) if isinstance(explicit, bool) else official
-        return {
-            "provider": "gemini",
-            "supported": supported,
-            "official": official,
-            "url": url,
-            "api_config": api_config,
-        }
+        support = build_native_web_search_support(
+            "gemini",
+            url=url,
+            api_config=api_config,
+            connection_name=model.get("connection_name"),
+        )
+        support["url"] = url
+        support["api_config"] = api_config
+        return support
 
-    return {"provider": provider or "unknown", "supported": False}
+    return build_native_web_search_support(provider or "unknown")
 
 
 def _resolve_web_search_strategy(
@@ -459,7 +720,9 @@ def _resolve_web_search_strategy(
     if requested_mode == WEB_SEARCH_MODE_HALO:
         effective_mode = WEB_SEARCH_MODE_HALO if halo_enabled else WEB_SEARCH_MODE_OFF
     elif requested_mode == WEB_SEARCH_MODE_NATIVE:
-        if native_enabled and native_support.get("supported"):
+        if native_enabled and (
+            native_support.get("supported") or native_support.get("can_attempt")
+        ):
             effective_mode = WEB_SEARCH_MODE_NATIVE
         elif halo_enabled:
             effective_mode = WEB_SEARCH_MODE_HALO
@@ -523,42 +786,41 @@ def _build_api_error_payload(
     """
     error_payload = _normalize_api_error(error, status_override=status_override)
 
-    code_str = str(error_payload.get("code", ""))
-    status: int | None = None
-    if code_str.startswith("http_"):
-        try:
-            status = int(code_str[5:])
-        except ValueError:
-            pass
-    if status is None:
-        raw_status = error_payload.get("status")
-        if isinstance(raw_status, int):
-            status = raw_status
-
     raw_message = str(error_payload.get("message", ""))
+    raw_message = _truncate_text(raw_message, 4000).strip()
     parsed_message = _parse_error_message(raw_message)
-
-    # Build title line
-    title_prefix = _API_ERROR_TITLE_MAP.get(status or 0, "上游服务返回错误")
-    if status:
-        title = (
-            f"{title_prefix}（HTTP {status}）\n{parsed_message}"
-            if parsed_message
-            else f"{title_prefix}（HTTP {status}）"
-        )
-    else:
-        title = f"{title_prefix}\n{parsed_message}" if parsed_message else title_prefix
-
-    reasons, suggestion = _API_ERROR_REASON_MAP.get(
-        status or 0, (["api_upstream_error"], "retry_or_switch")
+    status = _resolve_api_error_status(
+        error_payload, raw_message=raw_message, status_override=status_override
+    )
+    family = _classify_api_error_family(status=status, raw_message=raw_message)
+    evidence = {
+        key: value
+        for key, value in {
+            "interface": _extract_api_error_interface_hint(raw_message),
+            "host": _extract_api_error_host_hint(raw_message),
+            "parameter": _extract_api_error_param_hint(raw_message),
+            "code": _extract_api_error_code_hint(raw_message),
+        }.items()
+        if value
+    }
+    title = _build_api_error_title(family=family, status=status)
+    body = _build_api_error_body(family=family, evidence=evidence)
+    reasons, suggestion = _build_api_error_reasons_and_suggestion(
+        family=family, status=status
     )
 
     return {
         "type": "api_error",
         "model_id": model_id,
+        "family": family,
+        "status": status,
+        "title": title,
+        "body": body,
         "content": title,
         "reasons": list(reasons),
         "suggestion": suggestion,
+        "raw_message": raw_message or parsed_message,
+        "evidence": evidence,
     }
 
 
@@ -1655,7 +1917,9 @@ async def chat_completion_files_handler(
                             query, prefix=prefix, user=user
                         ),
                         k=request.app.state.config.TOP_K,
-                        reranking_function=request.app.state.rf,
+                        reranking_function=ensure_reranking_runtime(request.app)
+                        if request.app.state.config.ENABLE_RAG_HYBRID_SEARCH
+                        else None,
                         k_reranker=request.app.state.config.TOP_K_RERANKER,
                         r=request.app.state.config.RELEVANCE_THRESHOLD,
                         hybrid_search=request.app.state.config.ENABLE_RAG_HYBRID_SEARCH,

@@ -3,6 +3,14 @@
 	import type { Writable } from 'svelte/store';
 	import type { i18n as i18nType } from 'i18next';
 	import { toast } from 'svelte-sonner';
+	import {
+		approvePyodideConsent,
+		canUsePyodideRuntime,
+		getPyodideDownloadSummary,
+		getPyodidePackagesForCode,
+		hasPyodideConsent,
+		usesRemotePyodideRuntime
+	} from '$lib/utils/browser-ai-assets';
 
 	const i18n = getContext<Writable<i18nType>>('i18n');
 	const dispatch = createEventDispatcher();
@@ -46,7 +54,7 @@
 
 	async function ensureKernel() {
 		if (kernel) return kernel;
-		if (!APP_ENABLE_PYODIDE) {
+		if (!canUsePyodideRuntime()) {
 			throw new Error(pyodideDisabledMessage);
 		}
 		kernelLoading = true;
@@ -68,6 +76,20 @@
 	let cellExecCounts: Record<number, number> = {};
 	let globalExecCounter = 0;
 	let runningAll = false;
+	let showPyodideConsent = false;
+	let pyodideConsentPackages: string[] = [];
+	let pendingPyodideAction: { type: 'runAll' } | { type: 'runCell'; idx: number } | null = null;
+
+	function requestPyodideConsent(action: { type: 'runAll' } | { type: 'runCell'; idx: number }, code: string) {
+		if (!usesRemotePyodideRuntime() || hasPyodideConsent()) {
+			return false;
+		}
+
+		pendingPyodideAction = action;
+		pyodideConsentPackages = getPyodidePackagesForCode(code);
+		showPyodideConsent = true;
+		return true;
+	}
 
 	function resetCellOutput(idx: number) {
 		cellOutputs[idx] = { stdout: '', stderr: '', result: null };
@@ -79,6 +101,7 @@
 
 		const source = normalizeSource(cell.source);
 		if (!source.trim()) return;
+		if (requestPyodideConsent({ type: 'runCell', idx }, source)) return;
 
 		cellStates[idx] = 'running';
 		resetCellOutput(idx);
@@ -127,10 +150,15 @@
 	}
 
 	async function runAll() {
-		if (!APP_ENABLE_PYODIDE) {
+		if (!canUsePyodideRuntime()) {
 			toast.error($i18n.t(pyodideDisabledMessage));
 			return;
 		}
+		const fullSource = notebook.cells
+			.filter((cell) => cell.cell_type === 'code')
+			.map((cell) => normalizeSource(cell.source))
+			.join('\n');
+		if (requestPyodideConsent({ type: 'runAll' }, fullSource)) return;
 		runningAll = true;
 		for (let i = 0; i < notebook.cells.length; i++) {
 			if (notebook.cells[i].cell_type === 'code') {
@@ -239,7 +267,7 @@
 		<div class="flex items-center gap-1 flex-shrink-0">
 			<button
 				class="px-2.5 py-1 text-xs rounded-lg bg-green-600 text-white hover:bg-green-700 transition disabled:opacity-50 flex items-center gap-1"
-				disabled={!APP_ENABLE_PYODIDE || runningAll || kernelLoading}
+				disabled={!canUsePyodideRuntime() || runningAll || kernelLoading}
 				on:click={runAll}
 			>
 				{#if runningAll}
@@ -274,11 +302,49 @@
 			</button>
 		</div>
 	</div>
-	{#if !APP_ENABLE_PYODIDE}
+	{#if !canUsePyodideRuntime()}
 		<div
 			class="px-3 py-2 border-b border-amber-200 bg-amber-50 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200"
 		>
 			{$i18n.t(pyodideDisabledMessage)}
+		</div>
+	{:else if showPyodideConsent}
+		<div
+			class="px-3 py-3 border-b border-amber-200 bg-amber-50 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200"
+		>
+			<div class="font-medium">浏览器 Python 运行时未准备就绪</div>
+			<div class="mt-1 text-xs leading-relaxed">
+				{getPyodideDownloadSummary(pyodideConsentPackages)}
+			</div>
+			<div class="mt-3 flex gap-2">
+				<button
+					class="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-amber-700"
+					on:click={async () => {
+						approvePyodideConsent();
+						showPyodideConsent = false;
+						const action = pendingPyodideAction;
+						pendingPyodideAction = null;
+						if (action?.type === 'runAll') {
+							await runAll();
+						} else if (action?.type === 'runCell') {
+							await runCell(action.idx);
+						}
+					}}
+					type="button"
+				>
+					下载并启用
+				</button>
+				<button
+					class="rounded-lg bg-white px-3 py-1.5 text-xs font-medium text-amber-700 transition hover:bg-amber-100 dark:bg-transparent dark:text-amber-200 dark:hover:bg-amber-900/30"
+					on:click={() => {
+						showPyodideConsent = false;
+						pendingPyodideAction = null;
+					}}
+					type="button"
+				>
+					暂不
+				</button>
+			</div>
 		</div>
 	{/if}
 
@@ -314,7 +380,7 @@
 							<!-- Run button -->
 							<button
 								class="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-600 transition disabled:opacity-50 flex-shrink-0"
-								disabled={cellStates[idx] === 'running' || runningAll}
+								disabled={cellStates[idx] === 'running' || runningAll || !canUsePyodideRuntime()}
 								title={$i18n.t('Run Cell')}
 								on:click={() => runCell(idx)}
 							>

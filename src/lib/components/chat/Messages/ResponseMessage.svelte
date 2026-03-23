@@ -1553,22 +1553,20 @@
 											</Tooltip>
 										{/if}
 
-										{#if siblings.length > 1}
-											<Tooltip content={$i18n.t('Delete')} placement="bottom">
-												<button
-													type="button"
-													id="delete-response-button"
-													class="{isLastMessage
-														? 'visible'
-														: 'invisible group-hover:visible'} p-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-xl dark:hover:text-white hover:text-black transition-all duration-200 hover:scale-110 active:scale-95 regenerate-response-button"
-													on:click={() => {
-														showDeleteConfirm = true;
-													}}
-												>
-													<Trash2 class="w-4 h-4" strokeWidth={2} />
-												</button>
-											</Tooltip>
-										{/if}
+										<Tooltip content={$i18n.t('Delete')} placement="bottom">
+											<button
+												type="button"
+												id="delete-response-button"
+												class="{isLastMessage
+													? 'visible'
+													: 'invisible group-hover:visible'} p-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-xl dark:hover:text-white hover:text-black transition-all duration-200 hover:scale-110 active:scale-95 regenerate-response-button"
+												on:click={() => {
+													showDeleteConfirm = true;
+												}}
+											>
+												<Trash2 class="w-4 h-4" strokeWidth={2} />
+											</button>
+										</Tooltip>
 
 										{#if isLastMessage}
 											{#each model?.actions ?? [] as action}
