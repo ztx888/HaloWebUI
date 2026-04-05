@@ -64,6 +64,45 @@
 		'sougou'
 	];
 	let webLoaderEngines = ['playwright', 'firecrawl', 'tavily'];
+	const WEB_SEARCH_ENGINE_LABELS: Record<string, string> = {
+		searxng: 'SearXNG',
+		google_pse: 'Google PSE',
+		brave: 'Brave',
+		kagi: 'Kagi',
+		mojeek: 'Mojeek',
+		bocha: 'Bocha',
+		serpstack: 'Serpstack',
+		serper: 'Serper',
+		serply: 'Serply',
+		searchapi: 'SearchApi',
+		serpapi: 'SerpApi',
+		duckduckgo: 'DuckDuckGo',
+		tavily: 'Tavily',
+		jina: 'Jina',
+		bing: 'Bing',
+		exa: 'Exa',
+		perplexity: 'Perplexity',
+		grok: 'Grok',
+		sougou: 'Sougou'
+	};
+
+	const getWebSearchEngineLabel = (engine: string) => WEB_SEARCH_ENGINE_LABELS[engine] ?? engine;
+
+	$: webSearchEngineOptions = webSearchEngines.map((engine) => ({
+		value: engine,
+		label: getWebSearchEngineLabel(engine)
+	}));
+	$: currentWebSearchEngineOption =
+		webSearchEngineOptions.find((option) => option.value === webConfig?.WEB_SEARCH_ENGINE) ?? null;
+	$: ddgsBackendOptions = [
+		{ value: 'lite', label: $i18n.t('Lite') },
+		{ value: 'api', label: 'API' },
+		{ value: 'html', label: 'HTML' }
+	];
+	$: grokApiModeOptions = [
+		{ value: 'chat_completions', label: 'Chat Completions' },
+		{ value: 'responses', label: 'Responses API' }
+	];
 
 	const YOUTUBE_LANGUAGES = [
 		{ value: 'en', label: 'English' },
@@ -539,58 +578,84 @@
 						? 'glass-section glass-section-dirty'
 						: 'glass-section'}"
 				>
-					<div class="space-y-3">
-							<div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-								<div class="flex items-center justify-between glass-item px-4 py-3">
-									<div>
-										<div class="text-sm font-medium">{$i18n.t('Enable Native Web Search')}</div>
-										<div class="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
-											{$i18n.t('Allow supported provider connections to use model-built-in web search tools.')}
-										</div>
+					<div class="space-y-4">
+						<div class="grid grid-cols-1 md:grid-cols-2 gap-3 items-stretch">
+							<div class="glass-item h-full px-4 py-3 flex items-start justify-between gap-4">
+								<div class="min-w-0">
+									<div class="text-sm font-medium">{$i18n.t('Enable Native Web Search')}</div>
+									<div class="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
+										{$i18n.t('Allow supported provider connections to use model-built-in web search tools.')}
 									</div>
+								</div>
+								<div class="shrink-0 pt-0.5">
 									<Switch bind:state={webConfig.ENABLE_NATIVE_WEB_SEARCH} />
 								</div>
+							</div>
 
-								<div class="flex items-center justify-between glass-item px-4 py-3">
-									<div>
-										<div class="text-sm font-medium">{$i18n.t('Enable HaloWebUI Search')}</div>
-										<div class="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
-											{$i18n.t('HaloWebUI mode only')}
-										</div>
+							<div class="glass-item h-full px-4 py-3 flex items-start justify-between gap-4">
+								<div class="min-w-0">
+									<div class="text-sm font-medium">{$i18n.t('Enable HaloWebUI Search')}</div>
+									<div class="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
+										{$i18n.t('HaloWebUI mode only')}
 									</div>
+								</div>
+								<div class="shrink-0 pt-0.5">
 									<Switch bind:state={webConfig.ENABLE_WEB_SEARCH} />
 								</div>
 							</div>
+						</div>
 
-							<div class="pl-1 text-xs text-gray-500 dark:text-gray-400">
-								{$i18n.t('The following engine, loader, result count, domain filter, and query generation settings only apply to HaloWebUI search mode.')}
+						<div class="space-y-4 rounded-2xl border border-gray-200/50 dark:border-gray-700/30 bg-white/35 dark:bg-gray-900/10 p-3">
+							<div class="px-1 space-y-1">
+								<div class="text-sm font-medium text-gray-800 dark:text-gray-100">
+									{$i18n.t('HaloWebUI Search Configuration')}
+								</div>
+								<div class="text-xs text-gray-500 dark:text-gray-400">
+									{$i18n.t('The following engine, loader, result count, domain filter, and query generation settings only apply to HaloWebUI search mode.')}
+								</div>
 							</div>
 
-							<div class="grid grid-cols-1 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] gap-3 items-start">
-								<div class="glass-item px-4 py-3">
-									<div class="flex items-center justify-between gap-4">
-										<div>
-											<div class="text-sm font-medium">{$i18n.t('Search Engine')}</div>
-											<div class="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
-												{$i18n.t('HaloWebUI mode only')}
-											</div>
+							<div class="grid grid-cols-1 xl:grid-cols-[minmax(16rem,0.9fr)_minmax(0,1.1fr)] gap-4 items-stretch">
+								<div class="glass-item h-full p-4 space-y-3">
+									<div class="space-y-1">
+										<div class="text-sm font-medium">{$i18n.t('Search Engine')}</div>
+										<div class="text-xs text-gray-500 dark:text-gray-400">
+											{$i18n.t('Choose the search engine used by HaloWebUI web search.')}
+										</div>
+									</div>
+									<div class="space-y-1.5">
+										<div class="text-xs font-medium text-gray-500 dark:text-gray-400">
+											{$i18n.t('Current Search Engine')}
 										</div>
 										<HaloSelect
 											bind:value={webConfig.WEB_SEARCH_ENGINE}
-											options={webSearchEngines.map((e) => ({ value: e, label: e }))}
+											options={webSearchEngineOptions}
 											placeholder={$i18n.t('Select a engine')}
-											className="w-fit capitalize"
+											className="w-full"
 										/>
 									</div>
 								</div>
 
-								{#if webConfig.WEB_SEARCH_ENGINE}
-									<div class="space-y-3">
-										{#if webConfig.WEB_SEARCH_ENGINE === 'searxng'}
-										<div
-											class="glass-item p-4"
-										>
-											<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">{$i18n.t('SearXNG Query URL')}</div>
+								<div class="glass-item h-full p-4 space-y-4">
+									<div class="space-y-1">
+										<div class="flex flex-wrap items-center gap-2">
+											<div class="text-sm font-medium">
+												{$i18n.t('Current Engine Configuration')}
+											</div>
+											{#if currentWebSearchEngineOption}
+												<span class="inline-flex items-center rounded-full bg-gray-100/90 dark:bg-gray-800/80 px-2 py-0.5 text-[11px] font-medium text-gray-500 dark:text-gray-300">
+													{currentWebSearchEngineOption.label}
+												</span>
+											{/if}
+										</div>
+										<div class="text-xs text-gray-500 dark:text-gray-400">
+											{$i18n.t('Configure the parameters required by the selected search engine.')}
+										</div>
+									</div>
+
+									{#if webConfig.WEB_SEARCH_ENGINE === 'searxng'}
+										<div class="space-y-1.5">
+											<div class="text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('SearXNG Query URL')}</div>
 											<input
 												class="w-full py-2 px-3 text-sm dark:text-gray-300 glass-input"
 												type="text"
@@ -598,25 +663,21 @@
 												bind:value={webConfig.SEARXNG_QUERY_URL}
 												autocomplete="off"
 											/>
-											<div class="mt-1.5 text-xs text-gray-400 dark:text-gray-500">
+											<div class="text-xs text-gray-400 dark:text-gray-500">
 												{$i18n.t('Example: http://searxng:8080/search?q=<query>')}
 											</div>
 										</div>
 									{:else if webConfig.WEB_SEARCH_ENGINE === 'google_pse'}
 										<div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-											<div
-												class="glass-item p-4"
-											>
-												<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">{$i18n.t('Google PSE API Key')}</div>
+											<div class="space-y-1.5">
+												<div class="text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('Google PSE API Key')}</div>
 												<SensitiveInput
 													placeholder={$i18n.t('Enter Google PSE API Key')}
 													bind:value={webConfig.GOOGLE_PSE_API_KEY}
 												/>
 											</div>
-											<div
-												class="glass-item p-4"
-											>
-												<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">{$i18n.t('Google PSE Engine ID')}</div>
+											<div class="space-y-1.5">
+												<div class="text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('Google PSE Engine ID')}</div>
 												<SensitiveInput
 													placeholder={$i18n.t('Enter Google PSE Engine ID')}
 													bind:value={webConfig.GOOGLE_PSE_ENGINE_ID}
@@ -624,40 +685,32 @@
 											</div>
 										</div>
 									{:else if webConfig.WEB_SEARCH_ENGINE === 'brave'}
-										<div
-											class="glass-item p-4"
-										>
-											<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">{$i18n.t('Brave Search API Key')}</div>
+										<div class="space-y-1.5">
+											<div class="text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('Brave Search API Key')}</div>
 											<SensitiveInput
 												placeholder={$i18n.t('Enter Brave Search API Key')}
 												bind:value={webConfig.BRAVE_SEARCH_API_KEY}
 											/>
 										</div>
 									{:else if webConfig.WEB_SEARCH_ENGINE === 'kagi'}
-										<div
-											class="glass-item p-4"
-										>
-											<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">{$i18n.t('Kagi Search API Key')}</div>
+										<div class="space-y-1.5">
+											<div class="text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('Kagi Search API Key')}</div>
 											<SensitiveInput
 												placeholder={$i18n.t('Enter Kagi Search API Key')}
 												bind:value={webConfig.KAGI_SEARCH_API_KEY}
 											/>
 										</div>
 									{:else if webConfig.WEB_SEARCH_ENGINE === 'mojeek'}
-										<div
-											class="glass-item p-4"
-										>
-											<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">{$i18n.t('Mojeek Search API Key')}</div>
+										<div class="space-y-1.5">
+											<div class="text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('Mojeek Search API Key')}</div>
 											<SensitiveInput
 												placeholder={$i18n.t('Enter Mojeek Search API Key')}
 												bind:value={webConfig.MOJEEK_SEARCH_API_KEY}
 											/>
 										</div>
 									{:else if webConfig.WEB_SEARCH_ENGINE === 'bocha'}
-										<div
-											class="glass-item p-4"
-										>
-											<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">{$i18n.t('Bocha Search API Key')}</div>
+										<div class="space-y-1.5">
+											<div class="text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('Bocha Search API Key')}</div>
 											<SensitiveInput
 												placeholder={$i18n.t('Enter Bocha Search API Key')}
 												bind:value={webConfig.BOCHA_SEARCH_API_KEY}
@@ -665,64 +718,46 @@
 										</div>
 									{:else if webConfig.WEB_SEARCH_ENGINE === 'serpstack'}
 										<div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-											<div
-												class="glass-item p-4"
-											>
-												<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">{$i18n.t('Serpstack API Key')}</div>
+											<div class="space-y-1.5">
+												<div class="text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('Serpstack API Key')}</div>
 												<SensitiveInput
 													placeholder={$i18n.t('Enter Serpstack API Key')}
 													bind:value={webConfig.SERPSTACK_API_KEY}
 												/>
 											</div>
-											<div
-												class="flex items-center justify-between glass-item px-4 py-3"
-											>
-												<div class="text-sm font-medium">{$i18n.t('Use HTTPS')}</div>
+											<div class="flex items-center justify-between rounded-lg border border-gray-200/60 dark:border-gray-700/40 bg-gray-100/70 dark:bg-gray-800/60 px-3 py-2.5">
+												<div class="text-sm font-medium text-gray-700 dark:text-gray-200">{$i18n.t('Use HTTPS')}</div>
 												<Switch bind:state={webConfig.SERPSTACK_HTTPS} />
 											</div>
 										</div>
 									{:else if webConfig.WEB_SEARCH_ENGINE === 'serper'}
-										<div
-											class="glass-item p-4"
-										>
-											<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">{$i18n.t('Serper API Key')}</div>
+										<div class="space-y-1.5">
+											<div class="text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('Serper API Key')}</div>
 											<SensitiveInput
 												placeholder={$i18n.t('Enter Serper API Key')}
 												bind:value={webConfig.SERPER_API_KEY}
 											/>
 										</div>
 									{:else if webConfig.WEB_SEARCH_ENGINE === 'serply'}
-										<div
-											class="glass-item p-4"
-										>
-											<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">{$i18n.t('Serply API Key')}</div>
+										<div class="space-y-1.5">
+											<div class="text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('Serply API Key')}</div>
 											<SensitiveInput
 												placeholder={$i18n.t('Enter Serply API Key')}
 												bind:value={webConfig.SERPLY_API_KEY}
 											/>
 										</div>
 									{:else if webConfig.WEB_SEARCH_ENGINE === 'duckduckgo'}
-										<div
-											class="glass-item px-4 py-3"
-										>
-											<div class="flex items-center justify-between">
-												<div class="text-sm font-medium">{$i18n.t('DuckDuckGo Backend')}</div>
-												<HaloSelect
-													bind:value={webConfig.DDGS_BACKEND}
-													options={[
-														{ value: 'lite', label: $i18n.t('Lite') },
-														{ value: 'api', label: 'API' },
-														{ value: 'html', label: 'HTML' }
-													]}
-													className="w-fit"
-												/>
-											</div>
+										<div class="space-y-1.5">
+											<div class="text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('DuckDuckGo Backend')}</div>
+											<HaloSelect
+												bind:value={webConfig.DDGS_BACKEND}
+												options={ddgsBackendOptions}
+												className="w-full"
+											/>
 										</div>
 									{:else if webConfig.WEB_SEARCH_ENGINE === 'tavily'}
-										<div
-											class="glass-item p-4"
-										>
-											<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">{$i18n.t('Tavily API Key')}</div>
+										<div class="space-y-1.5">
+											<div class="text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('Tavily API Key')}</div>
 											<SensitiveInput
 												placeholder={$i18n.t('Enter Tavily API Key')}
 												bind:value={webConfig.TAVILY_API_KEY}
@@ -730,19 +765,15 @@
 										</div>
 									{:else if webConfig.WEB_SEARCH_ENGINE === 'searchapi'}
 										<div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-											<div
-												class="glass-item p-4"
-											>
-												<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">{$i18n.t('SearchApi API Key')}</div>
+											<div class="space-y-1.5">
+												<div class="text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('SearchApi API Key')}</div>
 												<SensitiveInput
 													placeholder={$i18n.t('Enter SearchApi API Key')}
 													bind:value={webConfig.SEARCHAPI_API_KEY}
 												/>
 											</div>
-											<div
-												class="glass-item p-4"
-											>
-												<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">{$i18n.t('SearchApi Engine')}</div>
+											<div class="space-y-1.5">
+												<div class="text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('SearchApi Engine')}</div>
 												<input
 													class="w-full py-2 px-3 text-sm dark:text-gray-300 glass-input"
 													type="text"
@@ -754,19 +785,15 @@
 										</div>
 									{:else if webConfig.WEB_SEARCH_ENGINE === 'serpapi'}
 										<div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-											<div
-												class="glass-item p-4"
-											>
-												<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">{$i18n.t('SerpApi API Key')}</div>
+											<div class="space-y-1.5">
+												<div class="text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('SerpApi API Key')}</div>
 												<SensitiveInput
 													placeholder={$i18n.t('Enter SerpApi API Key')}
 													bind:value={webConfig.SERPAPI_API_KEY}
 												/>
 											</div>
-											<div
-												class="glass-item p-4"
-											>
-												<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">{$i18n.t('SerpApi Engine')}</div>
+											<div class="space-y-1.5">
+												<div class="text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('SerpApi Engine')}</div>
 												<input
 													class="w-full py-2 px-3 text-sm dark:text-gray-300 glass-input"
 													type="text"
@@ -778,19 +805,15 @@
 										</div>
 									{:else if webConfig.WEB_SEARCH_ENGINE === 'jina'}
 										<div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-											<div
-												class="glass-item p-4"
-											>
-												<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">{$i18n.t('Jina API Key')}</div>
+											<div class="space-y-1.5">
+												<div class="text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('Jina API Key')}</div>
 												<SensitiveInput
 													placeholder={$i18n.t('Enter Jina API Key')}
 													bind:value={webConfig.JINA_API_KEY}
 												/>
 											</div>
-											<div
-												class="glass-item p-4"
-											>
-												<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">{$i18n.t('Jina API Base URL')}</div>
+											<div class="space-y-1.5">
+												<div class="text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('Jina API Base URL')}</div>
 												<input
 													class="w-full py-2 px-3 text-sm dark:text-gray-300 glass-input"
 													type="text"
@@ -802,10 +825,8 @@
 										</div>
 									{:else if webConfig.WEB_SEARCH_ENGINE === 'bing'}
 										<div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-											<div
-												class="glass-item p-4"
-											>
-												<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">{$i18n.t('Bing Search V7 Endpoint')}</div>
+											<div class="space-y-1.5">
+												<div class="text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('Bing Search V7 Endpoint')}</div>
 												<input
 													class="w-full py-2 px-3 text-sm dark:text-gray-300 glass-input"
 													type="text"
@@ -814,10 +835,8 @@
 													autocomplete="off"
 												/>
 											</div>
-											<div
-												class="glass-item p-4"
-											>
-												<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">{$i18n.t('Bing Search V7 Subscription Key')}</div>
+											<div class="space-y-1.5">
+												<div class="text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('Bing Search V7 Subscription Key')}</div>
 												<SensitiveInput
 													placeholder={$i18n.t('Enter Bing Search V7 Subscription Key')}
 													bind:value={webConfig.BING_SEARCH_V7_SUBSCRIPTION_KEY}
@@ -825,98 +844,86 @@
 											</div>
 										</div>
 									{:else if webConfig.WEB_SEARCH_ENGINE === 'exa'}
-										<div
-											class="glass-item p-4"
-										>
-											<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">{$i18n.t('Exa API Key')}</div>
+										<div class="space-y-1.5">
+											<div class="text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('Exa API Key')}</div>
 											<SensitiveInput
 												placeholder={$i18n.t('Enter Exa API Key')}
 												bind:value={webConfig.EXA_API_KEY}
 											/>
 										</div>
 									{:else if webConfig.WEB_SEARCH_ENGINE === 'perplexity'}
-										<div
-											class="glass-item p-4"
-										>
-											<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">{$i18n.t('Perplexity API Key')}</div>
+										<div class="space-y-1.5">
+											<div class="text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('Perplexity API Key')}</div>
 											<SensitiveInput
 												placeholder={$i18n.t('Enter Perplexity API Key')}
 												bind:value={webConfig.PERPLEXITY_API_KEY}
 											/>
 										</div>
 									{:else if webConfig.WEB_SEARCH_ENGINE === 'grok'}
-										<div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-											<div
-												class="glass-item p-4"
-											>
-												<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">{$i18n.t('Grok API Base URL')}</div>
-												<input
-													class="w-full py-2 px-3 text-sm dark:text-gray-300 glass-input"
-													type="text"
-													placeholder="https://api.x.ai"
-													bind:value={webConfig.GROK_API_BASE_URL}
-													autocomplete="off"
+										<div class="space-y-3">
+											<div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+												<div class="space-y-1.5">
+													<div class="text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('Grok API Base URL')}</div>
+													<input
+														class="w-full py-2 px-3 text-sm dark:text-gray-300 glass-input"
+														type="text"
+														placeholder="https://api.x.ai"
+														bind:value={webConfig.GROK_API_BASE_URL}
+														autocomplete="off"
+													/>
+												</div>
+												<div class="space-y-1.5">
+													<div class="text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('Grok Model')}</div>
+													<input
+														class="w-full py-2 px-3 text-sm dark:text-gray-300 glass-input"
+														type="text"
+														placeholder="grok-4-1-fast"
+														bind:value={webConfig.GROK_API_MODEL}
+														autocomplete="off"
+													/>
+												</div>
+												<div class="space-y-1.5">
+													<div class="text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('API Mode')}</div>
+													<HaloSelect
+														bind:value={webConfig.GROK_API_MODE}
+														options={grokApiModeOptions}
+														className="w-full"
+													/>
+												</div>
+											</div>
+											<div class="space-y-1.5">
+												<div class="text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('Grok API Key')}</div>
+												<SensitiveInput
+													placeholder={$i18n.t('Enter xAI Grok API Key')}
+													bind:value={webConfig.GROK_API_KEY}
 												/>
 											</div>
-											<div
-												class="glass-item p-4"
-											>
-												<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">{$i18n.t('Grok Model')}</div>
-												<input
-													class="w-full py-2 px-3 text-sm dark:text-gray-300 glass-input"
-													type="text"
-													placeholder="grok-4-1-fast"
-													bind:value={webConfig.GROK_API_MODEL}
-													autocomplete="off"
-												/>
-											</div>
-											<div
-												class="glass-item p-4"
-											>
-												<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">{$i18n.t('API Mode')}</div>
-												<select
-													class="w-full py-2 px-3 text-sm dark:text-gray-300 glass-input"
-													bind:value={webConfig.GROK_API_MODE}
-												>
-													<option value="chat_completions">Chat Completions</option>
-													<option value="responses">Responses API</option>
-												</select>
-											</div>
 										</div>
-										<div
-											class="glass-item p-4"
-										>
-											<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">{$i18n.t('Grok API Key')}</div>
-											<SensitiveInput
-												placeholder={$i18n.t('Enter xAI Grok API Key')}
-												bind:value={webConfig.GROK_API_KEY}
-											/>
-										</div>
-										{:else if webConfig.WEB_SEARCH_ENGINE === 'sougou'}
+									{:else if webConfig.WEB_SEARCH_ENGINE === 'sougou'}
 										<div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-											<div
-												class="glass-item p-4"
-											>
-												<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">{$i18n.t('Sougou Search API sID')}</div>
+											<div class="space-y-1.5">
+												<div class="text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('Sougou Search API sID')}</div>
 												<SensitiveInput
 													placeholder={$i18n.t('Enter Sougou Search API sID')}
 													bind:value={webConfig.SOUGOU_API_SID}
 												/>
 											</div>
-											<div
-												class="glass-item p-4"
-											>
-												<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">{$i18n.t('Sougou Search API SK')}</div>
+											<div class="space-y-1.5">
+												<div class="text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('Sougou Search API SK')}</div>
 												<SensitiveInput
 													placeholder={$i18n.t('Enter Sougou Search API SK')}
 													bind:value={webConfig.SOUGOU_API_SK}
 												/>
 											</div>
 										</div>
-										{/if}
-									</div>
-								{/if}
+									{:else}
+										<div class="text-sm text-gray-500 dark:text-gray-400">
+											{$i18n.t('Select a engine')}
+										</div>
+									{/if}
+								</div>
 							</div>
+						</div>
 
 							<!-- Search Settings -->
 							{#if webConfig.ENABLE_WEB_SEARCH}
