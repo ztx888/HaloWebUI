@@ -25,6 +25,7 @@
 	import { localizeCommonError } from '$lib/utils/common-errors';
 	import { getModelChatDisplayName } from '$lib/utils/model-display';
 	import {
+		getTemporaryChatAccess,
 		getTemporaryChatNavigationPath,
 		persistTemporaryChatOverride
 	} from '$lib/utils/temporary-chat';
@@ -136,8 +137,7 @@
 
 	const applyTemporaryChatMode = async (enabled: boolean) => {
 		const defaultEnabled = $settings?.temporaryChatByDefault ?? false;
-		const allowed = $user?.role === 'user' ? ($user?.permissions?.chat?.temporary ?? true) : true;
-		const enforced = allowed && ($user?.permissions?.chat?.temporary_enforced ?? false);
+		const { allowed, enforced } = getTemporaryChatAccess($user);
 		const nextEnabled = allowed ? (enforced ? true : enabled) : false;
 
 		persistTemporaryChatOverride(nextEnabled, { defaultEnabled, enforced, allowed });

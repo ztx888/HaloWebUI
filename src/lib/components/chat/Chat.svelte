@@ -54,6 +54,7 @@
 	} from '$lib/utils';
 	import { getModelChatDisplayName } from '$lib/utils/model-display';
 	import {
+		getTemporaryChatAccess,
 		getTemporaryChatNavigationPath,
 		persistTemporaryChatOverride,
 		resolveTemporaryChatEnabled
@@ -1197,8 +1198,7 @@
 
 	const syncTemporaryChatState = (settingsSource = $settings) => {
 		const defaultEnabled = settingsSource?.temporaryChatByDefault ?? false;
-		const allowed = $user?.role === 'user' ? ($user?.permissions?.chat?.temporary ?? true) : true;
-		const enforced = allowed && ($user?.permissions?.chat?.temporary_enforced ?? false);
+		const { allowed, enforced } = getTemporaryChatAccess($user);
 		const enabled = resolveTemporaryChatEnabled({
 			searchParams: $page.url.searchParams,
 			defaultEnabled,

@@ -245,6 +245,7 @@
 		command: server?.command ?? '',
 		args: Array.isArray(server?.args) ? [...server.args] : [],
 		env: server?.env ?? {},
+		headers: { ...(server?.headers ?? {}) },
 		name: server?.name,
 		description: server?.description,
 		auth_type: server?.auth_type ?? 'none',
@@ -276,6 +277,9 @@
 
 	const getMCPPrimaryValue = (server: any): string =>
 		(server.transport_type ?? 'http') === 'stdio' ? server.command || '' : server.url || '';
+
+	const getMCPHeaderCount = (server: any): number =>
+		Object.keys(server?.headers ?? {}).length;
 
 	const formatVerifiedAt = (value?: string): string => {
 		if (!value) return '';
@@ -1107,6 +1111,13 @@
 														>
 															{server.auth_type || 'none'}
 														</span>
+														{#if getMCPHeaderCount(server) > 0}
+															<span
+																class="px-1.5 py-0.5 text-xs rounded bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 shrink-0"
+															>
+																{$i18n.t('自定义头')} {getMCPHeaderCount(server)}
+															</span>
+														{/if}
 													{/if}
 													<span
 														class="px-1.5 py-0.5 text-xs rounded bg-gray-100 dark:bg-gray-800/70 text-gray-600 dark:text-gray-300 shrink-0"
@@ -1236,6 +1247,12 @@
 										>OAuth 2.1</span
 									>
 									<span>{$i18n.t('用于带有身份提供商流程的企业级部署')}</span>
+								</div>
+								<div class="flex items-start gap-2">
+									<span class="px-1.5 py-0.5 rounded bg-gray-100/80 dark:bg-gray-800/60 font-mono"
+										>Headers</span
+									>
+									<span>{$i18n.t('适用于 x-consumer-api-key、x-api-key 或供应商要求的专用请求头')}</span>
 								</div>
 							</div>
 						</div>

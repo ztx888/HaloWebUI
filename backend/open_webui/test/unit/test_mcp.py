@@ -20,6 +20,7 @@ def test_mcp_streamable_http_client_json_and_sse():
     from open_webui.utils.mcp import MCPStreamableHttpClient
 
     seen_session_headers = []
+    seen_custom_headers = []
 
     async def handler(request: web.Request):
         payload = await request.json()
@@ -27,6 +28,7 @@ def test_mcp_streamable_http_client_json_and_sse():
 
         # Record session header usage across requests.
         seen_session_headers.append(request.headers.get("Mcp-Session-Id"))
+        seen_custom_headers.append(request.headers.get("X-Custom-Header"))
 
         if method == "initialize":
             return web.json_response(
@@ -103,7 +105,9 @@ def test_mcp_streamable_http_client_json_and_sse():
         url = f"http://127.0.0.1:{port}/"
 
         try:
-            client = MCPStreamableHttpClient(url)
+            client = MCPStreamableHttpClient(
+                url, request_headers={"X-Custom-Header": "present-on-all-requests"}
+            )
             init = await client.initialize()
             assert init.get("serverInfo", {}).get("name") == "TestMCP"
 
@@ -122,6 +126,8 @@ def test_mcp_streamable_http_client_json_and_sse():
     # First request (initialize) has no session id; subsequent ones should.
     assert seen_session_headers[0] in (None, "")
     assert any(h == "sess_123" for h in seen_session_headers[1:])
+    assert seen_custom_headers
+    assert all(h == "present-on-all-requests" for h in seen_custom_headers)
 
 
 def test_get_tools_exposes_mcp_tool_and_routes_call(monkeypatch):
@@ -556,6 +562,39 @@ def test_get_mcp_servers_data_strict_selected_rejects_invalid_index():
     asyncio.run(run())
 
 
+def test_build_mcp_http_request_headers_merges_custom_headers_with_auth():
+    from open_webui.utils import mcp as mcp_mod
+
+    headers = mcp_mod._build_mcp_http_request_headers(
+        {
+            "transport_type": "http",
+            "auth_type": "bearer",
+            "key": "secret-token",
+            "headers": {"X-API-Key": "abc123", "X-Trace": 7},
+        },
+        None,
+    )
+
+    assert headers["Authorization"] == "Bearer secret-token"
+    assert headers["X-API-Key"] == "abc123"
+    assert headers["X-Trace"] == "7"
+
+
+def test_build_mcp_http_request_headers_custom_authorization_overrides_auto_auth():
+    from open_webui.utils import mcp as mcp_mod
+
+    headers = mcp_mod._build_mcp_http_request_headers(
+        {
+            "transport_type": "http",
+            "auth_type": "session",
+            "headers": {"Authorization": "Basic override-me-not"},
+        },
+        "session-token",
+    )
+
+    assert headers["Authorization"] == "Basic override-me-not"
+
+
 def test_mcp_server_connection_validates_transport_fields():
     from pydantic import ValidationError
 
@@ -579,6 +618,55 @@ def test_mcp_server_connection_validates_transport_fields():
     )
     assert stdio_conn.transport_type == "stdio"
     assert stdio_conn.command == "python"
+
+
+def test_mcp_server_connection_normalizes_http_headers_and_drops_stdio_headers():
+    from open_webui.routers.configs import MCPServerConnection
+
+    http_conn = MCPServerConnection(
+        transport_type="http",
+        url="http://example.com",
+        headers={
+            " X-Api-Key ": "abc",
+            "X-Trace": 123,
+            "": "ignored",
+        },
+    )
+    assert http_conn.headers == {"X-Api-Key": "abc", "X-Trace": "123"}
+
+    stdio_conn = MCPServerConnection(
+        transport_type="stdio",
+        command="python",
+        headers={"X-Api-Key": "should-be-dropped"},
+    )
+    assert stdio_conn.headers == {}
+
+
+def test_mcp_server_connection_rejects_reserved_duplicate_and_multiline_headers():
+    from pydantic import ValidationError
+
+    from open_webui.routers.configs import MCPServerConnection
+
+    with pytest.raises(ValidationError, match="保留头"):
+        MCPServerConnection(
+            transport_type="http",
+            url="http://example.com",
+            headers={"Content-Type": "application/json"},
+        )
+
+    with pytest.raises(ValidationError, match="重复"):
+        MCPServerConnection(
+            transport_type="http",
+            url="http://example.com",
+            headers={"X-API-Key": "a", "x-api-key": "b"},
+        )
+
+    with pytest.raises(ValidationError, match="换行符"):
+        MCPServerConnection(
+            transport_type="http",
+            url="http://example.com",
+            headers={"X-API-Key": "line1\nline2"},
+        )
 
 
 def test_validate_stdio_command_uses_connection_env_path(tmp_path, monkeypatch):
@@ -780,3 +868,77 @@ def test_mcp_servers_config_post_includes_runtime_capabilities(monkeypatch):
     assert saved["connections"][0]["url"] == "http://example.com"
     assert result["MCP_RUNTIME_CAPABILITIES"]["commands"]["npx"]["available"] is False
     assert result["MCP_RUNTIME_PROFILE"] == "slim"
+
+
+def test_mcp_servers_config_post_round_trips_headers(monkeypatch):
+    from open_webui.routers import configs as configs_router
+
+    saved = {}
+
+    monkeypatch.setattr(
+        configs_router,
+        "set_user_mcp_server_connections",
+        lambda _user, connections: saved.setdefault("connections", connections),
+    )
+    monkeypatch.setattr(configs_router, "get_mcp_runtime_capabilities", lambda: {"commands": {}})
+    monkeypatch.setattr(configs_router, "get_mcp_runtime_profile", lambda: "custom")
+
+    form_data = configs_router.MCPServersConfigForm(
+        MCP_SERVER_CONNECTIONS=[
+            configs_router.MCPServerConnection(
+                transport_type="http",
+                url="http://example.com",
+                auth_type="none",
+                headers={"X-API-Key": "abc123"},
+            )
+        ]
+    )
+
+    async def run():
+        return await configs_router.set_mcp_servers_config(
+            SimpleNamespace(),
+            form_data,
+            user=SimpleNamespace(role="admin"),
+        )
+
+    result = asyncio.run(run())
+
+    assert saved["connections"][0]["headers"] == {"X-API-Key": "abc123"}
+    assert result["MCP_SERVER_CONNECTIONS"][0]["headers"] == {"X-API-Key": "abc123"}
+
+
+def test_verify_mcp_server_connection_passes_headers_and_session_token(monkeypatch):
+    from open_webui.routers import configs as configs_router
+
+    captured = {}
+
+    async def fake_get_mcp_server_data(connection, **kwargs):
+        captured["connection"] = connection
+        captured["kwargs"] = kwargs
+        return {
+            "server_info": {"name": "verified"},
+            "tools": [{"name": "echo", "description": "Echo"}],
+        }
+
+    monkeypatch.setattr(configs_router, "get_mcp_server_data", fake_get_mcp_server_data)
+
+    request = SimpleNamespace(state=SimpleNamespace(token=SimpleNamespace(credentials="session-token")))
+    form_data = configs_router.MCPServerConnection(
+        transport_type="http",
+        url="http://example.com",
+        auth_type="session",
+        headers={"X-API-Key": "abc123"},
+    )
+
+    async def run():
+        return await configs_router.verify_mcp_server_connection(
+            request,
+            form_data,
+            user=SimpleNamespace(role="admin"),
+        )
+
+    result = asyncio.run(run())
+
+    assert captured["connection"]["headers"] == {"X-API-Key": "abc123"}
+    assert captured["kwargs"]["session_token"] == "session-token"
+    assert result["tool_count"] == 1

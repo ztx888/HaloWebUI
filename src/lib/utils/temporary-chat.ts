@@ -6,6 +6,21 @@ type TemporaryChatOptions = {
 	allowed?: boolean;
 };
 
+type TemporaryChatUser = {
+	role?: string | null;
+	permissions?: {
+		chat?: {
+			temporary?: unknown;
+			temporary_enforced?: unknown;
+		} | null;
+	} | null;
+} | null | undefined;
+
+type TemporaryChatAccess = {
+	allowed: boolean;
+	enforced: boolean;
+};
+
 type TemporaryChatNavigationOptions = TemporaryChatOptions & {
 	currentUrl: URL;
 	enabled: boolean;
@@ -22,6 +37,38 @@ const parseTemporaryChatValue = (value: string | null | undefined): boolean | nu
 	}
 
 	return null;
+};
+
+const parseBooleanLike = (value: unknown): boolean | null => {
+	if (typeof value === 'boolean') {
+		return value;
+	}
+
+	if (typeof value === 'string') {
+		return parseTemporaryChatValue(value);
+	}
+
+	return null;
+};
+
+export const getTemporaryChatAccess = (user: TemporaryChatUser): TemporaryChatAccess => {
+	// Admins should always be able to review saved chats and opt in/out of temporary mode.
+	if (user?.role === 'admin') {
+		return {
+			allowed: true,
+			enforced: false
+		};
+	}
+
+	const allowed =
+		user?.role === 'user'
+			? (parseBooleanLike(user?.permissions?.chat?.temporary) ?? true)
+			: true;
+
+	return {
+		allowed,
+		enforced: allowed && (parseBooleanLike(user?.permissions?.chat?.temporary_enforced) ?? false)
+	};
 };
 
 export const resolveTemporaryChatEnabled = ({

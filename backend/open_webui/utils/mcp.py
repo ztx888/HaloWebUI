@@ -39,6 +39,7 @@ DEFAULT_STDIO_ALLOWED_COMMANDS = {"npx", "node", "python", "python3", "uvx", "uv
 DEFAULT_MCP_PRESET_RUNTIME_COMMANDS = ("npx", "uvx")
 USER_FACING_SELECTION_ERROR = "所选 MCP 服务器当前不可用，请前往 设置 > 工具 重新验证。"
 VERSION_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+HTTP_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 MCP_TOOL_ID_RE = re.compile(r"^mcp:(\d+)$")
 STDIO_STDERR_TAIL_LINES = 12
 STDIO_STDERR_TAIL_CHARS = 1200
@@ -49,6 +50,16 @@ STDIO_START_TRANSPORT_ERROR_MARKERS = (
     "closed stdout before sending a response",
 )
 MCP_RUNTIME_PROFILES = {"main", "slim"}
+MCP_RESERVED_HTTP_HEADER_NAMES = {
+    "accept",
+    "connection",
+    "content-length",
+    "content-type",
+    "host",
+    "mcp-protocol-version",
+    "mcp-session-id",
+    "transfer-encoding",
+}
 
 
 class MCPHttpError(RuntimeError):
@@ -106,6 +117,49 @@ def _get_auth_headers(connection: Dict[str, Any], session_token: Optional[str]) 
             return {}
         return {"Authorization": f"Bearer {session_token}"}
     return {}
+
+
+def normalize_mcp_http_headers(raw_headers: Any) -> Dict[str, str]:
+    if raw_headers is None:
+        return {}
+    if not isinstance(raw_headers, dict):
+        raise ValueError("headers must be an object")
+
+    normalized: Dict[str, str] = {}
+    seen_lower: Dict[str, str] = {}
+
+    for raw_key, raw_value in raw_headers.items():
+        key = str(raw_key).strip()
+        if not key:
+            continue
+
+        value = "" if raw_value is None else str(raw_value)
+        if "\r" in key or "\n" in key:
+            raise ValueError("自定义请求头名称不能包含换行符。")
+        if "\r" in value or "\n" in value:
+            raise ValueError(f"自定义请求头 {key} 的值不能包含换行符。")
+        if not HTTP_HEADER_NAME_RE.fullmatch(key):
+            raise ValueError(f"自定义请求头名称无效: {key}")
+
+        lower_key = key.lower()
+        if lower_key in MCP_RESERVED_HTTP_HEADER_NAMES:
+            raise ValueError(f"请求头 {key} 为保留头，不能自定义。")
+
+        if lower_key in seen_lower:
+            raise ValueError(f"请求头 {key} 与 {seen_lower[lower_key]} 重复。")
+
+        seen_lower[lower_key] = key
+        normalized[key] = value
+
+    return normalized
+
+
+def _build_mcp_http_request_headers(
+    connection: Dict[str, Any], session_token: Optional[str]
+) -> Dict[str, str]:
+    headers = _get_auth_headers(connection, session_token)
+    headers.update(normalize_mcp_http_headers(connection.get("headers")))
+    return headers
 
 
 def _now_iso_utc() -> str:
@@ -375,31 +429,40 @@ class MCPStreamableHttpClient:
         url: str,
         *,
         auth_headers: Optional[Dict[str, str]] = None,
+        request_headers: Optional[Dict[str, str]] = None,
         protocol_version: str = DEFAULT_MCP_PROTOCOL_VERSION,
         timeout_s: Optional[int] = None,
     ):
         self.url = _strip_trailing_slash(url)
-        self.auth_headers = auth_headers or {}
+        merged_headers: Dict[str, str] = {}
+        if auth_headers:
+            merged_headers.update(auth_headers)
+        if request_headers:
+            merged_headers.update(request_headers)
+        self.request_headers = merged_headers
         self.protocol_version = protocol_version
         self.timeout_s = (
             timeout_s if timeout_s is not None else AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER_DATA
         )
         self.session_id: Optional[str] = None
 
+    def _build_request_headers(self) -> Dict[str, str]:
+        headers = {
+            **self.request_headers,
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+            "MCP-Protocol-Version": self.protocol_version,
+        }
+        if self.session_id:
+            headers["Mcp-Session-Id"] = self.session_id
+        return headers
+
     async def _post_jsonrpc(
         self,
         payload: Dict[str, Any],
         on_notification: Optional[Callable[[Dict[str, Any]], Coroutine]] = None,
     ) -> Tuple[Dict[str, Any], Optional[str]]:
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json, text/event-stream",
-            "MCP-Protocol-Version": self.protocol_version,
-            **self.auth_headers,
-        }
-        if self.session_id:
-            headers["Mcp-Session-Id"] = self.session_id
-
+        headers = self._build_request_headers()
         timeout = aiohttp.ClientTimeout(total=self.timeout_s) if self.timeout_s else None
         ssl_ctx = _get_ssl_context()
         async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -509,15 +572,7 @@ class MCPStreamableHttpClient:
             "method": "notifications/initialized",
             "params": {},
         }
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json, text/event-stream",
-            "MCP-Protocol-Version": self.protocol_version,
-            **self.auth_headers,
-        }
-        if self.session_id:
-            headers["Mcp-Session-Id"] = self.session_id
-
+        headers = self._build_request_headers()
         timeout = aiohttp.ClientTimeout(total=self.timeout_s) if self.timeout_s else None
         ssl_ctx = _get_ssl_context()
         async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -1217,7 +1272,7 @@ async def get_mcp_server_data(
 
     client = MCPStreamableHttpClient(
         url,
-        auth_headers=_get_auth_headers(connection, session_token),
+        request_headers=_build_mcp_http_request_headers(connection, session_token),
         protocol_version=protocol_version,
     )
     init_result = await client.initialize()
@@ -1333,7 +1388,7 @@ async def execute_mcp_tool(
 
     client = MCPStreamableHttpClient(
         url,
-        auth_headers=_get_auth_headers(connection, session_token),
+        request_headers=_build_mcp_http_request_headers(connection, session_token),
         protocol_version=protocol_version,
         timeout_s=MCP_TOOL_CALL_TIMEOUT,
     )

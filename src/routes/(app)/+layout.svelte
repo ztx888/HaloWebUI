@@ -20,6 +20,7 @@
 	import { WEBUI_VERSION } from '$lib/constants';
 	import { compareVersion } from '$lib/utils';
 	import {
+		getTemporaryChatAccess,
 		getTemporaryChatNavigationPath,
 		persistTemporaryChatOverride,
 		resolveTemporaryChatEnabled
@@ -57,8 +58,7 @@
 
 	const applyTemporaryChatMode = async (enabled: boolean) => {
 		const defaultEnabled = $settings?.temporaryChatByDefault ?? false;
-		const allowed = $user?.role === 'user' ? ($user?.permissions?.chat?.temporary ?? true) : true;
-		const enforced = allowed && ($user?.permissions?.chat?.temporary_enforced ?? false);
+		const { allowed, enforced } = getTemporaryChatAccess($user);
 		const nextEnabled = allowed ? (enforced ? true : enabled) : false;
 
 		persistTemporaryChatOverride(nextEnabled, { defaultEnabled, enforced, allowed });
@@ -251,10 +251,10 @@
 				showChangelog.set($settings?.version !== $config.version);
 			}
 
-			const temporaryChatAllowed =
-				$user?.role === 'user' ? ($user?.permissions?.chat?.temporary ?? true) : true;
-			const temporaryChatEnforced =
-				temporaryChatAllowed && ($user?.permissions?.chat?.temporary_enforced ?? false);
+			const {
+				allowed: temporaryChatAllowed,
+				enforced: temporaryChatEnforced
+			} = getTemporaryChatAccess($user);
 			const resolvedTemporaryChatEnabled = resolveTemporaryChatEnabled({
 				searchParams: $page.url.searchParams,
 				defaultEnabled: $settings?.temporaryChatByDefault ?? false,

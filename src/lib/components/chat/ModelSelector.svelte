@@ -5,6 +5,7 @@
 	import Tooltip from '../common/Tooltip.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import { getModelChatDisplayName } from '$lib/utils/model-display';
+	import { getTemporaryChatAccess } from '$lib/utils/temporary-chat';
 	const i18n = getContext('i18n');
 
 	export let selectedModels = [''];
@@ -24,6 +25,9 @@
 			$models.map((m) => m.id).includes(model) ? model : ''
 		);
 	}
+
+	let temporaryChatAccess = { allowed: true, enforced: false };
+	$: temporaryChatAccess = getTemporaryChatAccess($user);
 </script>
 
 <div class="flex flex-col w-full items-start">
@@ -50,10 +54,7 @@
 						placeholder={$i18n.t('Select a model')}
 						items={selectorItems}
 						showSetDefaultAction={showSetDefault && selectedModelIdx === 0}
-						showTemporaryChatControl={$user?.role === 'user'
-							? ($user?.permissions?.chat?.temporary ?? true) &&
-								!($user?.permissions?.chat?.temporary_enforced ?? false)
-							: true}
+						showTemporaryChatControl={temporaryChatAccess.allowed && !temporaryChatAccess.enforced}
 						bind:value={selectedModel}
 					/>
 				</div>

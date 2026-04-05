@@ -11,6 +11,12 @@
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import Switch from '$lib/components/common/Switch.svelte';
 	import HaloSelect from '$lib/components/common/HaloSelect.svelte';
+	import {
+		createEmptyMCPHeaderItem,
+		getMCPHeaderItemsFromRecord,
+		prepareMCPHeaderItems
+	} from '$lib/utils/mcp-headers';
+	import type { MCPHeaderItem, MCPHeaderValidationIssue } from '$lib/utils/mcp-headers';
 
 	import { verifyMCPServerConnection } from '$lib/apis/configs';
 
@@ -38,6 +44,7 @@
 		url?: string;
 		command?: string;
 		args?: string[];
+		headers?: Record<string, string>;
 		auth_type?: string;
 		requires_key?: boolean;
 		setup_hint: string;
@@ -74,6 +81,7 @@
 	let command = '';
 	let argsItems: string[] = [];
 	let envItems: EnvItem[] = [];
+	let headerItems: MCPHeaderItem[] = [];
 	let description = '';
 	let auth_type = 'none';
 	let key = '';
@@ -93,10 +101,11 @@
 			category: 'hosted',
 			transport_type: 'http',
 			icon: '🔗',
-			url: 'https://mcp.composio.dev',
-			auth_type: 'bearer',
+			url: 'https://connect.composio.dev/mcp',
+			headers: { 'x-consumer-api-key': '' },
+			auth_type: 'none',
 			requires_key: true,
-			setup_hint: '在 composio.dev 注册获取 API Key',
+			setup_hint: '把 composio 提供的 API Key 填到 x-consumer-api-key 的值里即可',
 			doc_url: 'https://docs.composio.dev'
 		},
 		{
@@ -240,6 +249,14 @@
 			acc[envKey] = item.value;
 			return acc;
 		}, {} as Record<string, string>);
+	$: preparedHeaders = prepareMCPHeaderItems(headerItems);
+	$: normalizedHeaders = preparedHeaders.normalizedHeaders;
+	$: headerValidationIssues = preparedHeaders.issues;
+	$: hasHeaderValidationIssues = headerValidationIssues.length > 0;
+	$: isFormInvalid =
+		transport_type === 'http'
+			? url.trim() === '' || hasHeaderValidationIssues
+			: command.trim() === '';
 
 	const formatVerifiedAt = (value?: string) => {
 		if (!value) return '';
@@ -256,6 +273,7 @@
 			args: normalizeArgs(),
 			env: normalizeEnv(),
 			auth_type: transport_type === 'http' ? auth_type : 'none',
+			headers: transport_type === 'http' ? preparedHeaders.signature : [],
 			key:
 				transport_type === 'http' && (auth_type === 'bearer' || auth_type === 'oauth21')
 					? key
@@ -275,10 +293,12 @@
 			url = '';
 			auth_type = 'none';
 			key = '';
+			headerItems = [];
 		} else {
 			command = '';
 			argsItems = [];
 			envItems = [];
+			headerItems = [];
 		}
 		clearVerifyCache();
 	};
@@ -294,6 +314,9 @@
 		if (transport_type === 'http') {
 			base.url = url.trim().replace(/\/$/, '');
 			base.auth_type = auth_type;
+			if (Object.keys(normalizedHeaders).length > 0) {
+				base.headers = normalizedHeaders;
+			}
 			if ((auth_type === 'bearer' || auth_type === 'oauth21') && key) {
 				base.key = key;
 			}
@@ -328,6 +351,7 @@
 			command = '';
 			argsItems = [];
 			envItems = [];
+			headerItems = [];
 			description = '';
 			auth_type = 'none';
 			key = '';
@@ -347,6 +371,7 @@
 			key: envKey,
 			value: String(envValue ?? '')
 		}));
+		headerItems = getMCPHeaderItemsFromRecord(connection.headers);
 		description = connection.description ?? '';
 		auth_type = connection.auth_type ?? 'none';
 		key = connection.key ?? '';
@@ -391,11 +416,13 @@
 		if (preset.transport_type === 'http') {
 			url = preset.url ?? '';
 			auth_type = preset.auth_type ?? 'none';
+			headerItems = getMCPHeaderItemsFromRecord(preset.headers);
 			key = '';
 		} else {
 			command = preset.command ?? '';
 			argsItems = [...(preset.args ?? [])];
 			envItems = [];
+			headerItems = [];
 			auth_type = 'none';
 			key = '';
 		}
@@ -404,13 +431,7 @@
 	};
 
 	const verifyHandler = async () => {
-		if (transport_type === 'http' && url.trim() === '') {
-			toast.error($i18n.t('Please enter a valid URL'));
-			return;
-		}
-
-		if (transport_type === 'stdio' && command.trim() === '') {
-			toast.error($i18n.t('Please enter a valid command'));
+		if (isFormInvalid) {
 			return;
 		}
 
@@ -449,13 +470,7 @@
 	};
 
 	const submitHandler = async () => {
-		if (transport_type === 'http' && url.trim() === '') {
-			toast.error($i18n.t('Please enter a valid URL'));
-			return;
-		}
-
-		if (transport_type === 'stdio' && command.trim() === '') {
-			toast.error($i18n.t('Please enter a valid command'));
+		if (isFormInvalid) {
 			return;
 		}
 
@@ -494,6 +509,43 @@
 	const updateEnvRow = (idx: number, keyName: 'key' | 'value', value: string) => {
 		envItems[idx] = { ...envItems[idx], [keyName]: value };
 		envItems = envItems;
+	};
+
+	const addHeaderRow = () => {
+		headerItems = [...headerItems, createEmptyMCPHeaderItem()];
+	};
+
+	const removeHeaderRow = (idx: number) => {
+		headerItems = headerItems.filter((_, index) => index !== idx);
+	};
+
+	const updateHeaderRow = (idx: number, keyName: 'key' | 'value', value: string) => {
+		headerItems[idx] = { ...headerItems[idx], [keyName]: value };
+		headerItems = headerItems;
+	};
+
+	const getHeaderIssuesForIndex = (idx: number): MCPHeaderValidationIssue[] =>
+		headerValidationIssues.filter((issue) => issue.index === idx);
+
+	const hasHeaderFieldIssue = (idx: number, field: 'key' | 'value') =>
+		headerValidationIssues.some((issue) => issue.index === idx && issue.field === field);
+
+	const getHeaderIssueMessage = (issue: MCPHeaderValidationIssue) => {
+		if (issue.code === 'missing_key') {
+			return $i18n.t('请输入请求头名称');
+		}
+		if (issue.code === 'invalid_name') {
+			return $i18n.t('请求头名称格式无效：{{key}}', { key: issue.key || '' });
+		}
+		if (issue.code === 'duplicate_key') {
+			return $i18n.t('请求头名称重复：{{key}}', { key: issue.key || '' });
+		}
+		if (issue.code === 'reserved_key') {
+			return $i18n.t('该请求头由 HaloWebUI 管理，不能自定义：{{key}}', {
+				key: issue.key || ''
+			});
+		}
+		return $i18n.t('请求头名称和值不能包含换行');
 	};
 </script>
 
@@ -592,7 +644,7 @@
 									/>
 									<Tooltip content={$i18n.t('Verify Connection')} className="shrink-0">
 										<button
-											class="self-center p-1.5 bg-transparent hover:bg-gray-100 dark:bg-gray-900 dark:hover:bg-gray-850 rounded-lg transition {verifyStatus ===
+											class="self-center p-1.5 bg-transparent hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-gray-900 dark:hover:bg-gray-850 rounded-lg transition {verifyStatus ===
 											'loading'
 												? 'animate-spin'
 												: ''}"
@@ -600,7 +652,7 @@
 												verifyHandler();
 											}}
 											type="button"
-											disabled={loading}
+											disabled={loading || isFormInvalid}
 										>
 											<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
 												<path
@@ -632,7 +684,7 @@
 									/>
 									<Tooltip content={$i18n.t('Verify Connection')} className="shrink-0">
 										<button
-											class="self-center p-1.5 bg-transparent hover:bg-gray-100 dark:bg-gray-900 dark:hover:bg-gray-850 rounded-lg transition {verifyStatus ===
+											class="self-center p-1.5 bg-transparent hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-gray-900 dark:hover:bg-gray-850 rounded-lg transition {verifyStatus ===
 											'loading'
 												? 'animate-spin'
 												: ''}"
@@ -640,7 +692,7 @@
 												verifyHandler();
 											}}
 											type="button"
-											disabled={loading}
+											disabled={loading || isFormInvalid}
 										>
 											<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
 												<path
@@ -758,30 +810,115 @@
 						{#if transport_type === 'http'}
 							<CollapsibleSection
 								title={$i18n.t('Advanced')}
-								open={auth_type !== 'none'}
+								open={auth_type !== 'none' || headerItems.length > 0}
 								className="mt-1"
 							>
 								<div class="space-y-3">
-									<div>
-										<div class="text-xs text-gray-500">{$i18n.t('Auth')}</div>
-										<HaloSelect
-											bind:value={auth_type}
-											options={[
-												{ value: 'none', label: 'None' },
-												{ value: 'bearer', label: 'Bearer' },
-												{ value: 'session', label: 'Session' },
-												{ value: 'oauth21', label: 'OAuth 2.1' }
-											]}
-											className="w-fit"
-										/>
+									<div class="rounded-xl border border-gray-200 dark:border-gray-800 bg-gray-50/80 dark:bg-gray-900/50 p-3 space-y-3">
+										<div>
+											<div class="text-sm font-medium text-gray-800 dark:text-gray-200">
+												{$i18n.t('常用认证')}
+											</div>
+											<div class="text-xs text-gray-500 mt-1">
+												{$i18n.t('自定义请求头会覆盖同名自动认证头。')}
+											</div>
+										</div>
+										<div>
+											<div class="text-xs text-gray-500">{$i18n.t('Auth')}</div>
+											<HaloSelect
+												bind:value={auth_type}
+												options={[
+													{ value: 'none', label: 'None' },
+													{ value: 'bearer', label: 'Bearer' },
+													{ value: 'session', label: 'Session' },
+													{ value: 'oauth21', label: 'OAuth 2.1' }
+												]}
+												className="w-fit"
+											/>
+										</div>
+
+										{#if auth_type === 'bearer' || auth_type === 'oauth21'}
+											<div>
+												<div class="text-xs text-gray-500">{$i18n.t('Key')}</div>
+												<SensitiveInput bind:value={key} />
+											</div>
+										{/if}
 									</div>
 
-									{#if auth_type === 'bearer' || auth_type === 'oauth21'}
-										<div>
-											<div class="text-xs text-gray-500">{$i18n.t('Key')}</div>
-											<SensitiveInput bind:value={key} />
+									<div class="rounded-xl border border-gray-200 dark:border-gray-800 bg-white/80 dark:bg-gray-950/40 p-3 space-y-3">
+										<div class="flex items-start justify-between gap-3">
+											<div class="min-w-0">
+												<div class="text-sm font-medium text-gray-800 dark:text-gray-200">
+													{$i18n.t('自定义请求头')}
+												</div>
+												<div class="text-xs text-gray-500 mt-1 leading-relaxed">
+													{$i18n.t(
+														'适用于 x-consumer-api-key、x-api-key、Authorization 等供应商专用请求头。'
+													)}
+												</div>
+											</div>
+											<button
+												type="button"
+												class="shrink-0 text-xs text-blue-600 dark:text-blue-400 hover:underline"
+												on:click={addHeaderRow}
+											>
+												{$i18n.t('添加请求头')}
+											</button>
 										</div>
-									{/if}
+
+										<div class="space-y-2">
+											{#if headerItems.length === 0}
+												<div class="rounded-lg border border-dashed border-gray-200 dark:border-gray-800 px-3 py-4 text-xs text-gray-400 dark:text-gray-500">
+													{$i18n.t('暂无自定义请求头')}
+												</div>
+											{/if}
+
+											{#each headerItems as item, idx}
+												<div class="space-y-2 rounded-xl border border-gray-200 dark:border-gray-800 bg-gray-50/70 dark:bg-gray-900/50 p-2.5">
+													<div class="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-2 items-start">
+														<input
+															class="w-full text-sm bg-transparent placeholder:text-gray-300 dark:placeholder:text-gray-700 outline-hidden border-b pb-1 {hasHeaderFieldIssue(idx, 'key')
+																? 'border-red-300 dark:border-red-700'
+																: 'border-gray-200 dark:border-gray-700'}"
+															type="text"
+															value={item.key}
+															on:input={(event) =>
+																updateHeaderRow(idx, 'key', event.currentTarget.value)}
+															placeholder={$i18n.t('Header Name')}
+															autocomplete="off"
+														/>
+														<SensitiveInput
+															bind:value={headerItems[idx].value}
+															required={false}
+															placeholder={$i18n.t('Header Value')}
+															outerClassName={`w-full flex bg-transparent border ${
+																hasHeaderFieldIssue(idx, 'value')
+																	? 'border-red-300 dark:border-red-700'
+																	: 'border-gray-200 dark:border-gray-700'
+															} rounded-lg px-3 py-2`}
+														/>
+														<button
+															type="button"
+															class="text-xs text-red-500 hover:underline shrink-0 pt-2"
+															on:click={() => removeHeaderRow(idx)}
+														>
+															{$i18n.t('移除')}
+														</button>
+													</div>
+
+													{#if getHeaderIssuesForIndex(idx).length > 0}
+														<div class="space-y-1">
+															{#each getHeaderIssuesForIndex(idx) as issue}
+																<div class="text-xs text-red-600 dark:text-red-400">
+																	{getHeaderIssueMessage(issue)}
+																</div>
+															{/each}
+														</div>
+													{/if}
+												</div>
+											{/each}
+										</div>
+									</div>
 								</div>
 							</CollapsibleSection>
 						{/if}
@@ -860,11 +997,9 @@
 
 					<div class="flex justify-end pt-4 text-sm font-medium">
 						<button
-							class="px-3.5 py-1.5 text-sm font-medium bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full {loading
-								? ' cursor-not-allowed'
-								: ''}"
+							class="px-3.5 py-1.5 text-sm font-medium bg-black hover:bg-gray-900 disabled:opacity-50 disabled:cursor-not-allowed text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full"
 							type="submit"
-							disabled={loading}
+							disabled={loading || isFormInvalid}
 						>
 							{$i18n.t('Save')}
 						</button>

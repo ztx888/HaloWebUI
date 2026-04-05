@@ -14,6 +14,7 @@ from open_webui.utils.mcp import (
     get_mcp_runtime_capabilities,
     get_mcp_runtime_profile,
     get_mcp_server_data,
+    normalize_mcp_http_headers,
 )
 from open_webui.utils.user_tools import (
     MAX_TOOL_CALL_ROUNDS_DEFAULT,
@@ -281,6 +282,7 @@ class MCPServerConnection(BaseModel):
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
     env: Dict[str, str] = Field(default_factory=dict)
+    headers: Dict[str, str] = Field(default_factory=dict)
     name: Optional[str] = None
     description: Optional[str] = None
     auth_type: Optional[str] = None
@@ -299,6 +301,7 @@ class MCPServerConnection(BaseModel):
         self.command = (self.command or "").strip() or None
         self.args = [str(item) for item in (self.args or [])]
         self.env = {str(key): str(value) for key, value in (self.env or {}).items()}
+        self.headers = normalize_mcp_http_headers(self.headers or {})
 
         if self.transport_type == "http":
             if not self.url:
@@ -306,6 +309,7 @@ class MCPServerConnection(BaseModel):
         elif self.transport_type == "stdio":
             if not self.command:
                 raise ValueError("command is required when transport_type is stdio")
+            self.headers = {}
 
         return self
 
@@ -334,6 +338,8 @@ def _normalize_mcp_server_connection(connection: MCPServerConnection) -> dict:
             "url": (connection.url or "").rstrip("/"),
             "auth_type": connection.auth_type,
         }
+        if connection.headers:
+            normalized["headers"] = connection.headers
         if connection.key:
             normalized["key"] = connection.key
 
