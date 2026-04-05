@@ -1,0 +1,6 @@
+services:
+  open-webui:
+    build:
+      args:
+        HALO_RUNTIME_PROFILE: slim
+    image: ghcr.io/ztx888/halowebui:${WEBUI_DOCKER_TAG-slim}

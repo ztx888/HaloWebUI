@@ -207,6 +207,8 @@
 			commands: Record<string, MCPRuntimeCommandCapability>;
 		};
 
+		type MCPRuntimeProfile = 'main' | 'slim' | 'custom';
+
 		const buildDefaultMCPRuntimeCapabilities = (): MCPRuntimeCapabilities => ({
 			commands: {
 				npx: { available: true, message: null },
@@ -228,8 +230,12 @@
 			return { commands };
 		};
 
+		const normalizeMCPRuntimeProfile = (value: any): MCPRuntimeProfile =>
+			value === 'main' || value === 'slim' ? value : 'custom';
+
 		let mcpServers: Array<any> = [];
 		let mcpRuntimeCapabilities: MCPRuntimeCapabilities = buildDefaultMCPRuntimeCapabilities();
+		let mcpRuntimeProfile: MCPRuntimeProfile = 'custom';
 		let showMCPModal = false;
 		let editingMCPServerIndex: number | null = null;
 
@@ -447,6 +453,7 @@
 
 		mcpServers = (res?.MCP_SERVER_CONNECTIONS || []).map(normalizeMCPServer);
 		mcpRuntimeCapabilities = normalizeMCPRuntimeCapabilities(res?.MCP_RUNTIME_CAPABILITIES);
+		mcpRuntimeProfile = normalizeMCPRuntimeProfile(res?.MCP_RUNTIME_PROFILE);
 	};
 
 	const addMCPServer = async (server: any) => {
@@ -490,6 +497,7 @@
 		if (res) {
 			mcpServers = (res?.MCP_SERVER_CONNECTIONS || []).map(normalizeMCPServer);
 			mcpRuntimeCapabilities = normalizeMCPRuntimeCapabilities(res?.MCP_RUNTIME_CAPABILITIES);
+			mcpRuntimeProfile = normalizeMCPRuntimeProfile(res?.MCP_RUNTIME_PROFILE);
 			if (!silent) toast.success($i18n.t('MCP 服务器已保存'));
 			toolsStore.set(await getTools(localStorage.token));
 			return true;
@@ -600,12 +608,13 @@
 	}}
 />
 
-<MCPServerModal
-	bind:show={showMCPModal}
-	isAdmin={$user?.role === 'admin'}
-	runtimeCapabilities={mcpRuntimeCapabilities}
-	connection={editingMCPServerIndex !== null ? mcpServers[editingMCPServerIndex] : null}
-	onSubmit={async (connection) => {
+	<MCPServerModal
+		bind:show={showMCPModal}
+		isAdmin={$user?.role === 'admin'}
+		runtimeCapabilities={mcpRuntimeCapabilities}
+		runtimeProfile={mcpRuntimeProfile}
+		connection={editingMCPServerIndex !== null ? mcpServers[editingMCPServerIndex] : null}
+		onSubmit={async (connection) => {
 		if (editingMCPServerIndex !== null) {
 			await updateMCPServer(editingMCPServerIndex, connection);
 		} else {

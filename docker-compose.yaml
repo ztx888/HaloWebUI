@@ -8,6 +8,7 @@ services:
         PRELOAD_LOCAL_MODELS: ${PRELOAD_LOCAL_MODELS-false}
         ENABLE_PYODIDE: ${ENABLE_PYODIDE-false}
         VITE_SOURCEMAP: ${VITE_SOURCEMAP-false}
+        HALO_RUNTIME_PROFILE: ${HALO_RUNTIME_PROFILE-main}
     image: ghcr.io/ztx888/halowebui:${WEBUI_DOCKER_TAG-main}
     container_name: open-webui
     volumes:

@@ -20,6 +20,7 @@ ARG HALO_PG_CLIENT_MAJORS="14 15 16 17 18"
 ARG USE_TIKTOKEN_ENCODING_NAME="cl100k_base"
 
 ARG BUILD_HASH=dev-build
+ARG HALO_RUNTIME_PROFILE=main
 # Override at your own risk - non-root configurations are untested
 ARG UID=0
 ARG GID=0
@@ -61,6 +62,7 @@ ARG USE_CUDA_VER
 ARG USE_EMBEDDING_MODEL
 ARG USE_RERANKING_MODEL
 ARG USE_TIKTOKEN_ENCODING_NAME
+ARG HALO_RUNTIME_PROFILE
 
 ENV USE_CUDA_DOCKER=${USE_CUDA} \
     USE_CUDA_DOCKER_VER=${USE_CUDA_VER} \
@@ -98,7 +100,9 @@ RUN set -eux; \
         fi; \
     fi; \
     pip install --no-cache-dir -r "${requirements_file}"; \
-    pip install --no-cache-dir uv; \
+    if [ "$HALO_RUNTIME_PROFILE" = "main" ]; then \
+        pip install --no-cache-dir uv; \
+    fi; \
     if [ "$PRELOAD_LOCAL_MODELS" = "true" ]; then \
         if [ "$INSTALL_PROFILE" = "local-rag" ] || [ "$INSTALL_PROFILE" = "full" ]; then \
             python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ['RAG_EMBEDDING_MODEL'], device='cpu')"; \
@@ -123,6 +127,7 @@ ARG USE_TIKTOKEN_ENCODING_NAME
 ARG HALO_PG_CLIENT_MAJORS
 ARG UID
 ARG GID
+ARG HALO_RUNTIME_PROFILE
 
 ENV ENV=prod \
     PORT=8080 \
@@ -147,6 +152,7 @@ ENV ENV=prod \
     TIKTOKEN_ENCODING_NAME="$USE_TIKTOKEN_ENCODING_NAME" \
     TIKTOKEN_CACHE_DIR="/app/backend/data/cache/tiktoken" \
     HF_HOME="/app/backend/data/cache/embedding/models" \
+    HALO_RUNTIME_PROFILE=${HALO_RUNTIME_PROFILE} \
     PATH="/opt/venv/bin:${PATH}" \
     HOME=/root
 
@@ -182,6 +188,9 @@ RUN set -eux; \
         > /etc/apt/sources.list.d/pgdg.list; \
     apt-get update; \
     apt-get install -y --no-install-recommends ${pg_client_packages}; \
+    if [ "$HALO_RUNTIME_PROFILE" = "main" ]; then \
+        apt-get install -y --no-install-recommends nodejs npm; \
+    fi; \
     if [ "$USE_OLLAMA" = "true" ]; then \
         curl -fsSL https://ollama.com/install.sh | sh; \
     fi; \

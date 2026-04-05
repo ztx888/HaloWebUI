@@ -54,10 +54,13 @@
 		commands?: Record<string, RuntimeCommandCapability>;
 	};
 
+	type RuntimeProfile = 'main' | 'slim' | 'custom';
+
 	export let show = false;
 	export let connection: any = null;
 	export let isAdmin = false;
 	export let runtimeCapabilities: RuntimeCapabilities = { commands: {} };
+	export let runtimeProfile: RuntimeProfile = 'custom';
 	export let onSubmit: (connection: any) => Promise<void> = async () => {};
 
 	let activeTab: 'manual' | 'presets' = 'presets';
@@ -187,15 +190,47 @@
 	const emptyEnvItem = (): EnvItem => ({ key: '', value: '' });
 	const getRuntimeCapabilityKey = (command?: string) =>
 		command?.trim().split(/[\\/]/).pop()?.toLowerCase() ?? '';
-	const isPresetRuntimeAvailable = (preset: MCPPreset) => {
+
+	const getPresetRuntimeCapability = (preset: MCPPreset) => {
 		const capabilityKey = getRuntimeCapabilityKey(preset.command);
-		if (!capabilityKey) return true;
-		return runtimeCapabilities?.commands?.[capabilityKey]?.available ?? true;
+		if (!capabilityKey) return null;
+		return runtimeCapabilities?.commands?.[capabilityKey] ?? null;
 	};
+
+	const isPresetRuntimeUnavailable = (preset: MCPPreset) =>
+		getPresetRuntimeCapability(preset)?.available === false;
+
+	const getPresetSetupHint = (preset: MCPPreset) => {
+		if (!isPresetRuntimeUnavailable(preset)) {
+			return preset.setup_hint;
+		}
+
+		if (runtimeProfile === 'slim') {
+			return '当前为官方 slim 轻量版，未内置该运行时。想直接体验这个 MCP，推荐切换到官方 main 镜像。';
+		}
+
+		return getPresetRuntimeCapability(preset)?.message || preset.setup_hint;
+	};
+
+	const getPresetRuntimeHint = (preset: MCPPreset) => {
+		if (!isPresetRuntimeUnavailable(preset)) {
+			return preset.runtime_hint;
+		}
+
+		if (runtimeProfile === 'slim') {
+			return '推荐切换到 main 镜像获得开箱体验';
+		}
+
+		return getPresetRuntimeCapability(preset)?.message || preset.runtime_hint;
+	};
+
+	const getManualStdioHint = () =>
+		runtimeProfile === 'slim'
+			? '当前运行的是官方 slim 轻量版，默认不内置 Node.js / uv。想直接使用常见 stdio MCP，推荐切换到官方 main 镜像；如果你愿意自行安装运行时，也可以继续手动配置。'
+			: 'stdio 命令运行在 HaloWebUI 服务端。请确保服务端已安装对应 runtime；npx 需要 Node.js，uvx 需要 Python + uv。启动中的 stdio MCP 会额外占用内存，空闲后会自动回收。';
+
 	$: hostedPresets = MCP_PRESETS.filter((preset) => preset.category === 'hosted');
-	$: stdioPresets = MCP_PRESETS.filter(
-		(preset) => preset.category === 'stdio' && isPresetRuntimeAvailable(preset)
-	);
+	$: stdioPresets = MCP_PRESETS.filter((preset) => preset.category === 'stdio');
 
 	const normalizeArgs = () => argsItems.map((item) => item.trim()).filter(Boolean);
 	const normalizeEnv = () =>
@@ -704,7 +739,7 @@
 								</div>
 
 									<div class="text-xs text-amber-700 dark:text-amber-300 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/40 p-2 leading-relaxed">
-										{$i18n.t('stdio 命令运行在 HaloWebUI 服务端。请确保服务端已安装对应 runtime；npx 需要 Node.js，uvx 需要 Python + uv。启动中的 stdio MCP 会额外占用内存，空闲后会自动回收。')}
+										{getManualStdioHint()}
 									</div>
 								</div>
 							{/if}
@@ -835,11 +870,17 @@
 						</button>
 					</div>
 				</form>
-			{:else if activeTab === 'presets'}
-				<div class="space-y-4 mt-3">
-					<div>
-						<div class="text-xs font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">
-							{$i18n.t('HTTP 托管服务')}
+				{:else if activeTab === 'presets'}
+					<div class="space-y-4 mt-3">
+						{#if isAdmin && runtimeProfile === 'slim'}
+							<div class="rounded-xl border border-sky-200 bg-sky-50 p-3 text-xs leading-relaxed text-sky-700 dark:border-sky-800/50 dark:bg-sky-950/30 dark:text-sky-300">
+								当前运行的是官方 `slim` 轻量版。它不会预装 stdio MCP 常用运行时；想直接体验 `Memory`、`Context7`、`Fetch`、`Time` 等预设，推荐切换到官方 `main` 镜像。
+							</div>
+						{/if}
+
+						<div>
+							<div class="text-xs font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">
+								{$i18n.t('HTTP 托管服务')}
 						</div>
 						<div class="space-y-2">
 							{#each hostedPresets as preset}
@@ -864,38 +905,45 @@
 						</div>
 					</div>
 
-					{#if isAdmin && stdioPresets.length > 0}
-						<div>
-							<div class="text-xs font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">
-								{$i18n.t('stdio 本地服务')}
-							</div>
-							<div class="space-y-2">
-								{#each stdioPresets as preset}
-									<button
-										type="button"
-										class="w-full text-left p-3 rounded-xl border border-gray-200 dark:border-gray-800 hover:border-gray-300 dark:hover:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-900/60 transition"
-										on:click={() => applyPreset(preset)}
-									>
-										<div class="flex items-start gap-3">
-											<div class="text-lg">{preset.icon}</div>
-											<div class="min-w-0 flex-1">
-												<div class="flex items-center gap-2">
-													<div class="text-sm font-medium">{preset.name}</div>
-													<span class="px-1.5 py-0.5 text-[10px] rounded bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">stdio</span>
+						{#if isAdmin && stdioPresets.length > 0}
+							<div>
+								<div class="text-xs font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">
+									{$i18n.t('stdio 本地服务')}
+								</div>
+								<div class="space-y-2">
+									{#each stdioPresets as preset}
+										<button
+											type="button"
+											class="w-full text-left p-3 rounded-xl border transition {isPresetRuntimeUnavailable(preset)
+												? 'border-amber-200 bg-amber-50/80 hover:border-amber-300 dark:border-amber-800/40 dark:bg-amber-950/20 dark:hover:border-amber-700'
+												: 'border-gray-200 hover:border-gray-300 hover:bg-gray-50 dark:border-gray-800 dark:hover:border-gray-700 dark:hover:bg-gray-900/60'}"
+											on:click={() => applyPreset(preset)}
+										>
+											<div class="flex items-start gap-3">
+												<div class="text-lg">{preset.icon}</div>
+												<div class="min-w-0 flex-1">
+													<div class="flex items-center gap-2">
+														<div class="text-sm font-medium">{preset.name}</div>
+														<span class="px-1.5 py-0.5 text-[10px] rounded bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">stdio</span>
+														{#if isPresetRuntimeUnavailable(preset) && runtimeProfile === 'slim'}
+															<span class="px-1.5 py-0.5 text-[10px] rounded bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300">推荐 main</span>
+														{/if}
+													</div>
+													<div class="text-xs text-gray-500 mt-0.5">{preset.description}</div>
+													{#if preset.command}
+														<div class="text-xs font-mono text-gray-500 mt-1 break-all">
+															{preset.command} {(preset.args ?? []).join(' ')}
+														</div>
+													{/if}
+													<div class="text-xs mt-1 {isPresetRuntimeUnavailable(preset) ? 'text-amber-700 dark:text-amber-300' : 'text-gray-400'}">
+														{getPresetSetupHint(preset)}
+													</div>
+													{#if getPresetRuntimeHint(preset)}
+														<div class="text-xs text-amber-700 dark:text-amber-300 mt-1">
+															{getPresetRuntimeHint(preset)}
+														</div>
+													{/if}
 												</div>
-												<div class="text-xs text-gray-500 mt-0.5">{preset.description}</div>
-												{#if preset.command}
-													<div class="text-xs font-mono text-gray-500 mt-1 break-all">
-														{preset.command} {(preset.args ?? []).join(' ')}
-													</div>
-												{/if}
-												<div class="text-xs text-gray-400 mt-1">{preset.setup_hint}</div>
-												{#if preset.runtime_hint}
-													<div class="text-xs text-amber-700 dark:text-amber-300 mt-1">
-														{preset.runtime_hint}
-													</div>
-												{/if}
-											</div>
 										</div>
 									</button>
 								{/each}

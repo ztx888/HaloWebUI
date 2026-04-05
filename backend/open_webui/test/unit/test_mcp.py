@@ -636,6 +636,19 @@ def test_get_mcp_runtime_capabilities_reports_preset_commands(monkeypatch):
     assert "Node.js" in capabilities["commands"]["npx"]["message"]
 
 
+def test_get_mcp_runtime_profile_prefers_known_profiles(monkeypatch):
+    from open_webui.utils import mcp as mcp_mod
+
+    monkeypatch.setenv("HALO_RUNTIME_PROFILE", "slim")
+    assert mcp_mod.get_mcp_runtime_profile() == "slim"
+
+    monkeypatch.setenv("HALO_RUNTIME_PROFILE", "main")
+    assert mcp_mod.get_mcp_runtime_profile() == "main"
+
+    monkeypatch.setenv("HALO_RUNTIME_PROFILE", "weird")
+    assert mcp_mod.get_mcp_runtime_profile() == "custom"
+
+
 def test_mcp_stdio_start_failure_includes_stderr(tmp_path, monkeypatch):
     from open_webui.utils import mcp as mcp_mod
 
@@ -714,6 +727,7 @@ def test_mcp_servers_config_get_includes_runtime_capabilities(monkeypatch):
         "get_mcp_runtime_capabilities",
         lambda: {"commands": {"uvx": {"available": True, "message": None}}},
     )
+    monkeypatch.setattr(configs_router, "get_mcp_runtime_profile", lambda: "main")
 
     async def run():
         return await configs_router.get_mcp_servers_config(
@@ -725,6 +739,7 @@ def test_mcp_servers_config_get_includes_runtime_capabilities(monkeypatch):
 
     assert result["MCP_SERVER_CONNECTIONS"][0]["url"] == "http://example.com"
     assert result["MCP_RUNTIME_CAPABILITIES"]["commands"]["uvx"]["available"] is True
+    assert result["MCP_RUNTIME_PROFILE"] == "main"
 
 
 def test_mcp_servers_config_post_includes_runtime_capabilities(monkeypatch):
@@ -742,6 +757,7 @@ def test_mcp_servers_config_post_includes_runtime_capabilities(monkeypatch):
         "get_mcp_runtime_capabilities",
         lambda: {"commands": {"npx": {"available": False, "message": "missing"}}},
     )
+    monkeypatch.setattr(configs_router, "get_mcp_runtime_profile", lambda: "slim")
 
     form_data = configs_router.MCPServersConfigForm(
         MCP_SERVER_CONNECTIONS=[
@@ -763,3 +779,4 @@ def test_mcp_servers_config_post_includes_runtime_capabilities(monkeypatch):
 
     assert saved["connections"][0]["url"] == "http://example.com"
     assert result["MCP_RUNTIME_CAPABILITIES"]["commands"]["npx"]["available"] is False
+    assert result["MCP_RUNTIME_PROFILE"] == "slim"

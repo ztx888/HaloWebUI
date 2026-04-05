@@ -10,7 +10,11 @@ from open_webui.config import get_config, save_config
 from open_webui.config import BannerModel
 
 from open_webui.utils.tools import get_tool_server_data, get_tool_servers_data
-from open_webui.utils.mcp import get_mcp_runtime_capabilities, get_mcp_server_data
+from open_webui.utils.mcp import (
+    get_mcp_runtime_capabilities,
+    get_mcp_runtime_profile,
+    get_mcp_server_data,
+)
 from open_webui.utils.user_tools import (
     MAX_TOOL_CALL_ROUNDS_DEFAULT,
     MAX_TOOL_CALL_ROUNDS_MAX,
@@ -339,12 +343,14 @@ def _normalize_mcp_server_connection(connection: MCPServerConnection) -> dict:
 class MCPServersConfigForm(BaseModel):
     MCP_SERVER_CONNECTIONS: list[MCPServerConnection]
     MCP_RUNTIME_CAPABILITIES: Dict[str, Any] = Field(default_factory=dict)
+    MCP_RUNTIME_PROFILE: str = "custom"
 
 
 def _build_mcp_servers_config_response(connections: list[dict]) -> dict:
     return {
         "MCP_SERVER_CONNECTIONS": connections,
         "MCP_RUNTIME_CAPABILITIES": get_mcp_runtime_capabilities(),
+        "MCP_RUNTIME_PROFILE": get_mcp_runtime_profile(),
     }
 
 

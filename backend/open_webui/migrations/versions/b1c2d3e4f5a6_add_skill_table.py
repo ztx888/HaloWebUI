@@ -29,7 +29,7 @@ def upgrade():
             sa.Column("content", sa.Text(), server_default=""),
             sa.Column("meta", sa.JSON(), nullable=True),
             sa.Column("access_control", sa.JSON(), nullable=True),
-            sa.Column("is_active", sa.Boolean(), server_default=sa.text("1")),
+            sa.Column("is_active", sa.Boolean(), server_default=sa.true()),
             sa.Column("updated_at", sa.BigInteger(), nullable=False),
             sa.Column("created_at", sa.BigInteger(), nullable=False),
         )
@@ -59,7 +59,7 @@ def upgrade():
     if "is_active" not in prompt_columns:
         op.add_column(
             "prompt",
-            sa.Column("is_active", sa.Boolean(), server_default=sa.text("1"), nullable=False),
+            sa.Column("is_active", sa.Boolean(), server_default=sa.true(), nullable=False),
         )
 
 

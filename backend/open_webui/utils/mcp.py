@@ -48,6 +48,7 @@ STDIO_START_TRANSPORT_ERROR_MARKERS = (
     "process is not running",
     "closed stdout before sending a response",
 )
+MCP_RUNTIME_PROFILES = {"main", "slim"}
 
 
 class MCPHttpError(RuntimeError):
@@ -289,6 +290,11 @@ def _build_mcp_runtime_command_capability(command: str) -> Dict[str, Any]:
         "available": bool(resolved),
         "message": None if resolved else _friendly_missing_command_message(command),
     }
+
+
+def get_mcp_runtime_profile() -> str:
+    profile = str(os.environ.get("HALO_RUNTIME_PROFILE") or "").strip().lower()
+    return profile if profile in MCP_RUNTIME_PROFILES else "custom"
 
 
 def get_mcp_runtime_capabilities(

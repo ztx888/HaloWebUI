@@ -32,6 +32,7 @@ from open_webui.env import (
     log,
 )
 from open_webui.internal.db import Base, get_db
+from open_webui.migration_runner import run_alembic_migrations
 from open_webui.utils.redis import get_redis_connection
 from open_webui.retrieval.document_processing_shared import (
     FILE_PROCESSING_MODE_FULL_CONTEXT,
@@ -137,20 +138,7 @@ def _get_default_document_provider_configs() -> dict:
 
 # Function to run the alembic migrations
 def run_migrations():
-    log.info("Running migrations")
-    try:
-        from alembic import command
-        from alembic.config import Config
-
-        alembic_cfg = Config(OPEN_WEBUI_DIR / "alembic.ini")
-
-        # Set the script location dynamically
-        migrations_path = OPEN_WEBUI_DIR / "migrations"
-        alembic_cfg.set_main_option("script_location", str(migrations_path))
-
-        command.upgrade(alembic_cfg, "head")
-    except Exception as e:
-        log.exception(f"Error running migrations: {e}")
+    run_alembic_migrations(OPEN_WEBUI_DIR, log)
 
 
 run_migrations()
