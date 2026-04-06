@@ -707,7 +707,35 @@ def test_validate_stdio_command_falls_back_to_home_local_bin(tmp_path, monkeypat
     assert resolved == str(uvx_path)
 
 
-def test_get_mcp_runtime_capabilities_reports_preset_commands(monkeypatch):
+def test_get_derived_stdio_runtime_requirements_detects_git_source():
+    from open_webui.utils import mcp as mcp_mod
+
+    assert mcp_mod._get_derived_stdio_runtime_requirements(
+        {
+            "transport_type": "stdio",
+            "command": "uvx",
+            "args": [
+                "--native-tls",
+                "--from",
+                "git+https://github.com/example/server.git",
+                "example-server",
+            ],
+        }
+    ) == ["git"]
+
+    assert (
+        mcp_mod._get_derived_stdio_runtime_requirements(
+            {
+                "transport_type": "stdio",
+                "command": "uvx",
+                "args": ["mcp-server-fetch"],
+            }
+        )
+        == []
+    )
+
+
+def test_validate_stdio_command_requires_git_for_uvx_git_source(monkeypatch):
     from open_webui.utils import mcp as mcp_mod
 
     monkeypatch.setattr(
@@ -716,10 +744,62 @@ def test_get_mcp_runtime_capabilities_reports_preset_commands(monkeypatch):
         lambda _connection, command: f"/resolved/{command}" if command == "uvx" else None,
     )
 
+    with pytest.raises(ValueError, match="Git 源安装"):
+        mcp_mod._validate_stdio_command(
+            {
+                "transport_type": "stdio",
+                "command": "uvx",
+                "args": [
+                    "--from",
+                    "git+https://github.com/example/server.git",
+                    "example-server",
+                ],
+            }
+        )
+
+
+def test_validate_stdio_command_requires_git_for_uvx_git_source_with_path(
+    tmp_path, monkeypatch
+):
+    from open_webui.utils import mcp as mcp_mod
+
+    uvx_path = tmp_path / "uvx"
+    uvx_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    uvx_path.chmod(0o755)
+
+    monkeypatch.setattr(mcp_mod, "_resolve_stdio_command", lambda _connection, command: None)
+
+    with pytest.raises(ValueError, match="Git 源安装"):
+        mcp_mod._validate_stdio_command(
+            {
+                "transport_type": "stdio",
+                "command": str(uvx_path),
+                "args": [
+                    "--from",
+                    "git+https://github.com/example/server.git",
+                    "example-server",
+                ],
+            }
+        )
+
+
+def test_get_mcp_runtime_capabilities_reports_preset_commands(monkeypatch):
+    from open_webui.utils import mcp as mcp_mod
+
+    monkeypatch.setattr(
+        mcp_mod,
+        "_resolve_stdio_command",
+        lambda _connection, command: f"/resolved/{command}"
+        if command in {"uvx", "git"}
+        else None,
+    )
+
     capabilities = mcp_mod.get_mcp_runtime_capabilities()
 
     assert capabilities["commands"]["uvx"]["available"] is True
     assert capabilities["commands"]["uvx"]["message"] is None
+    assert capabilities["commands"]["git"]["available"] is True
+    assert capabilities["commands"]["git"]["message"] is None
     assert capabilities["commands"]["npx"]["available"] is False
     assert "Node.js" in capabilities["commands"]["npx"]["message"]
 

@@ -189,7 +189,7 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends ${pg_client_packages}; \
     if [ "$HALO_RUNTIME_PROFILE" = "main" ]; then \
-        apt-get install -y --no-install-recommends nodejs npm; \
+        apt-get install -y --no-install-recommends nodejs npm git; \
     fi; \
     if [ "$USE_OLLAMA" = "true" ]; then \
         curl -fsSL https://ollama.com/install.sh | sh; \

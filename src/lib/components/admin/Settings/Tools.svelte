@@ -212,7 +212,8 @@
 		const buildDefaultMCPRuntimeCapabilities = (): MCPRuntimeCapabilities => ({
 			commands: {
 				npx: { available: true, message: null },
-				uvx: { available: true, message: null }
+				uvx: { available: true, message: null },
+				git: { available: true, message: null }
 			}
 		});
 
@@ -1133,6 +1134,12 @@
 												{#if server.verified_at}
 													<div class="text-xs text-gray-400 dark:text-gray-500 mt-0.5 ml-4">
 														{$i18n.t('上次验证于')} {formatVerifiedAt(server.verified_at)}
+													</div>
+												{:else}
+													<div class="text-xs text-amber-600 dark:text-amber-300 mt-0.5 ml-4">
+														{$i18n.t(
+															'Saved but not verified yet. Open edit and click "Verify Connection".'
+														)}
 													</div>
 												{/if}
 											</div>

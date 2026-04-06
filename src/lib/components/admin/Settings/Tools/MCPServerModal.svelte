@@ -19,6 +19,7 @@
 	import type { MCPHeaderItem, MCPHeaderValidationIssue } from '$lib/utils/mcp-headers';
 
 	import { verifyMCPServerConnection } from '$lib/apis/configs';
+	import { getErrorDetail } from '$lib/apis/response';
 
 	type TransportType = 'http' | 'stdio';
 
@@ -199,11 +200,32 @@
 	const emptyEnvItem = (): EnvItem => ({ key: '', value: '' });
 	const getRuntimeCapabilityKey = (command?: string) =>
 		command?.trim().split(/[\\/]/).pop()?.toLowerCase() ?? '';
-
-	const getPresetRuntimeCapability = (preset: MCPPreset) => {
-		const capabilityKey = getRuntimeCapabilityKey(preset.command);
+	const getRuntimeCommandCapability = (command?: string) => {
+		const capabilityKey = getRuntimeCapabilityKey(command);
 		if (!capabilityKey) return null;
 		return runtimeCapabilities?.commands?.[capabilityKey] ?? null;
+	};
+	const stdioCommandUsesGitSource = (commandValue: string, args: string[]) => {
+		const capabilityKey = getRuntimeCapabilityKey(commandValue);
+		if (capabilityKey !== 'uv' && capabilityKey !== 'uvx') {
+			return false;
+		}
+
+		return args.some((arg, idx) => {
+			const normalizedArg = arg.trim();
+			if (!normalizedArg) return false;
+			if (normalizedArg.startsWith('git+')) return true;
+			if (normalizedArg.startsWith('--from=')) {
+				return normalizedArg.slice('--from='.length).startsWith('git+');
+			}
+			return normalizedArg === '--from' && (args[idx + 1] ?? '').trim().startsWith('git+');
+		});
+	};
+	const getVerifyActionLabel = () =>
+		lastVerifiedSignature ? $i18n.t('Re-verify Connection') : $i18n.t('Verify Connection');
+
+	const getPresetRuntimeCapability = (preset: MCPPreset) => {
+		return getRuntimeCommandCapability(preset.command);
 	};
 
 	const isPresetRuntimeUnavailable = (preset: MCPPreset) =>
@@ -249,10 +271,17 @@
 			acc[envKey] = item.value;
 			return acc;
 		}, {} as Record<string, string>);
+	$: normalizedArgs = normalizeArgs();
+	$: normalizedEnvMap = normalizeEnv();
 	$: preparedHeaders = prepareMCPHeaderItems(headerItems);
 	$: normalizedHeaders = preparedHeaders.normalizedHeaders;
 	$: headerValidationIssues = preparedHeaders.issues;
 	$: hasHeaderValidationIssues = headerValidationIssues.length > 0;
+	$: currentStdioUsesGitSource =
+		transport_type === 'stdio' && stdioCommandUsesGitSource(command, normalizedArgs);
+	$: gitRuntimeCapability = runtimeCapabilities?.commands?.git ?? null;
+	$: missingGitForCurrentStdio =
+		currentStdioUsesGitSource && gitRuntimeCapability?.available === false;
 	$: isFormInvalid =
 		transport_type === 'http'
 			? url.trim() === '' || hasHeaderValidationIssues
@@ -270,8 +299,8 @@
 			transport_type,
 			url: url.trim().replace(/\/$/, ''),
 			command: command.trim(),
-			args: normalizeArgs(),
-			env: normalizeEnv(),
+			args: normalizedArgs,
+			env: normalizedEnvMap,
 			auth_type: transport_type === 'http' ? auth_type : 'none',
 			headers: transport_type === 'http' ? preparedHeaders.signature : [],
 			key:
@@ -322,8 +351,8 @@
 			}
 		} else {
 			base.command = command.trim();
-			base.args = normalizeArgs();
-			base.env = normalizeEnv();
+			base.args = normalizedArgs;
+			base.env = normalizedEnvMap;
 		}
 
 		if (persistVerify) {
@@ -444,7 +473,7 @@
 			buildConnectionPayload({ persistVerify: false })
 		).catch((err) => {
 			verifyStatus = 'error';
-			verifyError = err?.message || err?.detail || $i18n.t('Connection failed');
+			verifyError = getErrorDetail(err, $i18n.t('Connection failed'));
 			return null;
 		});
 
@@ -642,25 +671,23 @@
 										autocomplete="off"
 										required
 									/>
-									<Tooltip content={$i18n.t('Verify Connection')} className="shrink-0">
+									<Tooltip content={getVerifyActionLabel()} className="shrink-0">
 										<button
-											class="self-center p-1.5 bg-transparent hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-gray-900 dark:hover:bg-gray-850 rounded-lg transition {verifyStatus ===
-											'loading'
-												? 'animate-spin'
-												: ''}"
+											class="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-gray-200 bg-transparent px-2.5 py-1.5 text-xs font-medium transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700 dark:bg-gray-900 dark:hover:bg-gray-850"
 											on:click={() => {
 												verifyHandler();
 											}}
 											type="button"
 											disabled={loading || isFormInvalid}
 										>
-											<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+											<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="h-4 w-4 {verifyStatus === 'loading' ? 'animate-spin' : ''}">
 												<path
 													fill-rule="evenodd"
 													d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311h2.433a.75.75 0 000-1.5H3.989a.75.75 0 00-.75.75v4.242a.75.75 0 001.5 0v-2.43l.31.31a7 7 0 0011.712-3.138.75.75 0 00-1.449-.39zm1.23-3.723a.75.75 0 00.219-.53V2.929a.75.75 0 00-1.5 0V5.36l-.31-.31A7 7 0 003.239 8.188a.75.75 0 101.448.389A5.5 5.5 0 0113.89 6.11l.311.31h-2.432a.75.75 0 000 1.5h4.243a.75.75 0 00.53-.219z"
 													clip-rule="evenodd"
 												/>
 											</svg>
+											<span>{getVerifyActionLabel()}</span>
 										</button>
 									</Tooltip>
 								</div>
@@ -682,25 +709,23 @@
 										autocomplete="off"
 										required
 									/>
-									<Tooltip content={$i18n.t('Verify Connection')} className="shrink-0">
+									<Tooltip content={getVerifyActionLabel()} className="shrink-0">
 										<button
-											class="self-center p-1.5 bg-transparent hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-gray-900 dark:hover:bg-gray-850 rounded-lg transition {verifyStatus ===
-											'loading'
-												? 'animate-spin'
-												: ''}"
+											class="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-gray-200 bg-transparent px-2.5 py-1.5 text-xs font-medium transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700 dark:bg-gray-900 dark:hover:bg-gray-850"
 											on:click={() => {
 												verifyHandler();
 											}}
 											type="button"
 											disabled={loading || isFormInvalid}
 										>
-											<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+											<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="h-4 w-4 {verifyStatus === 'loading' ? 'animate-spin' : ''}">
 												<path
 													fill-rule="evenodd"
 													d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311h2.433a.75.75 0 000-1.5H3.989a.75.75 0 00-.75.75v4.242a.75.75 0 001.5 0v-2.43l.31.31a7 7 0 0011.712-3.138.75.75 0 00-1.449-.39zm1.23-3.723a.75.75 0 00.219-.53V2.929a.75.75 0 00-1.5 0V5.36l-.31-.31A7 7 0 003.239 8.188a.75.75 0 101.448.389A5.5 5.5 0 0113.89 6.11l.311.31h-2.432a.75.75 0 000 1.5h4.243a.75.75 0 00.53-.219z"
 													clip-rule="evenodd"
 												/>
 											</svg>
+											<span>{getVerifyActionLabel()}</span>
 										</button>
 									</Tooltip>
 								</div>
@@ -790,11 +815,19 @@
 									</div>
 								</div>
 
+								{#if missingGitForCurrentStdio}
 									<div class="text-xs text-amber-700 dark:text-amber-300 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/40 p-2 leading-relaxed">
-										{getManualStdioHint()}
+										{$i18n.t(
+											'This stdio MCP uses a Git source. The current runtime has uv/uvx, but is missing git. Switch to the official main image with git included, or install git in the container and verify again.'
+										)}
 									</div>
+								{/if}
+
+								<div class="text-xs text-amber-700 dark:text-amber-300 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/40 p-2 leading-relaxed">
+									{getManualStdioHint()}
 								</div>
-							{/if}
+							</div>
+						{/if}
 
 						<div>
 							<div class="text-xs text-gray-500 mb-1">{$i18n.t('描述（可选）')}</div>

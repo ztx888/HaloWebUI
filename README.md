@@ -74,9 +74,11 @@ docker compose up -d
 
 ### MCP stdio 说明
 
-- 官方 `main` 镜像是默认推荐版，内置了 `uv/uvx` 与 `node/npx`，可直接体验当前内置的常见 stdio MCP 预设。
-- 官方 `slim` 镜像是极简版，不内置 stdio MCP 常用运行时，适合更在意镜像体积和依赖面的部署场景。
+- 官方 `main` 镜像是默认推荐版，内置了 `uv/uvx`、`node/npx` 与 `git`，可直接体验当前内置的常见 stdio MCP 预设，也兼容一部分通过 `uvx --from git+...` 安装的 MCP。
+- 官方 `slim` 镜像是极简版，不内置 `uv/uvx`、`node/npx`、`git` 等 stdio MCP 常用运行时，适合更在意镜像体积和依赖面的部署场景。
 - stdio MCP 命令运行在 HaloWebUI 服务端容器内，不是在浏览器或你的本机 shell 里执行。
+- 某些自定义 stdio MCP 会通过 Git 源安装（例如 `uvx --from git+https://...`）；这类配置除了 `uv/uvx` 之外还依赖 `git`。
+- MCP 配置保存后不会自动验证，需要进入对应配置并手动点击 `验证连接` / `重新验证`。
 - `docker exec` 进入容器后能运行某个命令，不代表临时 shell 路径一定适合长期配置为 MCP command；请优先使用镜像内稳定安装路径或服务主进程可见的常规 `PATH`，避免依赖 `fnm_multishells/...` 这类临时路径。
 - stdio MCP 本身不会长期常驻占用额外内存；额外内存主要来自实际启动的 MCP 子进程，空闲后会按系统配置自动回收。
 

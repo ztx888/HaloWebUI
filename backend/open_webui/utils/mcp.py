@@ -36,7 +36,7 @@ SUPPORTED_MCP_PROTOCOL_VERSIONS = [
 ]
 DEFAULT_MCP_PROTOCOL_VERSION = "2025-06-18"
 DEFAULT_STDIO_ALLOWED_COMMANDS = {"npx", "node", "python", "python3", "uvx", "uv", "deno"}
-DEFAULT_MCP_PRESET_RUNTIME_COMMANDS = ("npx", "uvx")
+DEFAULT_MCP_PRESET_RUNTIME_COMMANDS = ("npx", "uvx", "git")
 USER_FACING_SELECTION_ERROR = "所选 MCP 服务器当前不可用，请前往 设置 > 工具 重新验证。"
 VERSION_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 HTTP_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
@@ -254,6 +254,8 @@ def _friendly_missing_command_message(command_name: str) -> str:
         return f"{command_name} 不存在，请安装 Node.js 并确保 {command_name} 在 PATH 中。"
     if normalized in {"uv", "uvx"}:
         return f"{command_name} 不存在，请安装 Python + uv 并确保 {command_name} 在 PATH 中。"
+    if normalized == "git":
+        return "git 不存在，请安装 git 并确保 git 在 PATH 中。"
     if normalized in {"python", "python3"}:
         return f"{command_name} 不存在，请安装 Python 并确保 {command_name} 在 PATH 中。"
     if normalized == "deno":
@@ -293,6 +295,47 @@ def _normalize_stdio_env(connection: Dict[str, Any]) -> Dict[str, str]:
     return {str(key): str(value) for key, value in env.items()}
 
 
+def _get_stdio_command_name(connection: Dict[str, Any]) -> str:
+    command = str(connection.get("command") or "").strip()
+    if not command:
+        return ""
+    return os.path.basename(command).lower()
+
+
+def _stdio_uses_git_source(connection: Dict[str, Any]) -> bool:
+    if _get_stdio_command_name(connection) not in {"uv", "uvx"}:
+        return False
+
+    args = [str(item).strip() for item in _normalize_stdio_args(connection)]
+    for idx, arg in enumerate(args):
+        if arg.startswith("git+"):
+            return True
+        if arg.startswith("--from=") and arg[len("--from=") :].startswith("git+"):
+            return True
+        if arg == "--from" and idx + 1 < len(args) and args[idx + 1].startswith("git+"):
+            return True
+
+    return False
+
+
+def _get_derived_stdio_runtime_requirements(connection: Dict[str, Any]) -> List[str]:
+    requirements: List[str] = []
+    if _stdio_uses_git_source(connection):
+        requirements.append("git")
+    return requirements
+
+
+def _friendly_missing_stdio_dependency_message(
+    connection: Dict[str, Any], dependency: str
+) -> str:
+    if dependency == "git" and _stdio_uses_git_source(connection):
+        return (
+            "当前 MCP 通过 Git 源安装（检测到 git+...），但运行环境缺少 git。"
+            "请切换到包含 git 的官方 main 镜像，或在容器内安装 git 后重新验证。"
+        )
+    return _friendly_missing_command_message(dependency)
+
+
 def _validate_stdio_command(connection: Dict[str, Any]) -> str:
     command = str(connection.get("command") or "").strip()
     if not command:
@@ -312,11 +355,16 @@ def _validate_stdio_command(connection: Dict[str, Any]) -> str:
             raise ValueError(f"命令路径不存在: {command}")
         if not os.access(command, os.X_OK):
             raise ValueError(f"命令不可执行: {command}")
-        return command
+        resolved = command
+    else:
+        resolved = _resolve_stdio_command(connection, command)
+        if not resolved:
+            raise ValueError(_friendly_missing_command_message(command_name))
 
-    resolved = _resolve_stdio_command(connection, command)
-    if not resolved:
-        raise ValueError(_friendly_missing_command_message(command_name))
+    for dependency in _get_derived_stdio_runtime_requirements(connection):
+        if not _resolve_stdio_command(connection, dependency):
+            raise ValueError(_friendly_missing_stdio_dependency_message(connection, dependency))
+
     return resolved
 
 
