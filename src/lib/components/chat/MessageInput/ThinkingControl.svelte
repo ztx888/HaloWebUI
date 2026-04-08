@@ -7,15 +7,21 @@
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import SteppedSlider from '$lib/components/common/SteppedSlider.svelte';
 	import LightBlub from '$lib/components/icons/LightBlub.svelte';
+	import {
+		getAnthropicBudgetSteps,
+		getAnthropicEffortSteps,
+		getAnthropicThinkingProfile
+	} from '$lib/utils/anthropic-thinking';
 
 	const i18n = getContext('i18n');
 
 	export let reasoningEffort: string | null = null;
 	export let maxThinkingTokens: number | null = null;
+	export let model: any = null;
 
 	let dropdownOpen = false;
 
-	const effortSteps = [
+	const defaultEffortSteps = [
 		{ value: 'none', label: '关闭' },
 		{ value: null, label: '默认' },
 		{ value: 'low', label: 'Low' },
@@ -25,7 +31,7 @@
 		{ value: 'max', label: 'Max' }
 	];
 
-	const tokenSteps = [
+	const defaultTokenSteps = [
 		{ value: 0, label: '关闭' },
 		{ value: null, label: '默认' },
 		{ value: 2048, label: '2K' },
@@ -34,6 +40,10 @@
 		{ value: 32768, label: '32K' },
 		{ value: 65536, label: '64K' }
 	];
+
+	$: anthropicProfile = getAnthropicThinkingProfile(model);
+	$: effortSteps = getAnthropicEffortSteps(model) ?? defaultEffortSteps;
+	$: tokenSteps = getAnthropicBudgetSteps(model) ?? defaultTokenSteps;
 
 	let activeMode: 'effort' | 'budget' = 'effort';
 	let customMode = false;
@@ -69,9 +79,12 @@
 		8192: { text: 'text-blue-500 dark:text-blue-400', dot: 'bg-blue-500' },
 		16384: { text: 'text-amber-500 dark:text-amber-400', dot: 'bg-amber-500' },
 		32768: { text: 'text-orange-500 dark:text-orange-400', dot: 'bg-orange-500' },
+		64000: { text: 'text-red-500 dark:text-red-400', dot: 'bg-red-500' },
 		65536: { text: 'text-red-500 dark:text-red-400', dot: 'bg-red-500' }
 	};
-	const budgetThresholds = [2048, 8192, 16384, 32768, 65536];
+	const budgetThresholds = Object.keys(budgetColorMap)
+		.map((value) => Number(value))
+		.sort((a, b) => a - b);
 
 	function findClosestBudgetColor(tokens: number): { text: string; dot: string } {
 		for (let i = budgetThresholds.length - 1; i >= 0; i--) {
@@ -83,7 +96,7 @@
 	const inactiveColor = { text: 'text-gray-600 dark:text-gray-300', dot: '' };
 
 	// 滑动条每个 step 的颜色（bg-xxx 格式）
-	const effortSliderColors = [
+	const defaultEffortSliderColors = [
 		'bg-gray-500 dark:bg-gray-400', // 关闭
 		'bg-slate-500 dark:bg-slate-400', // 默认
 		'bg-sky-500 dark:bg-sky-400', // Low
@@ -92,7 +105,15 @@
 		'bg-orange-500 dark:bg-orange-400', // XH
 		'bg-red-500 dark:bg-red-400' // Max
 	];
-	const budgetSliderColors = [
+	const compactEffortSliderColors = [
+		'bg-gray-500 dark:bg-gray-400', // 关闭
+		'bg-slate-500 dark:bg-slate-400', // 默认
+		'bg-sky-500 dark:bg-sky-400', // Low
+		'bg-blue-500 dark:bg-blue-400', // Medium
+		'bg-amber-500 dark:bg-amber-400', // High
+		'bg-red-500 dark:bg-red-400' // Max
+	];
+	const defaultBudgetSliderColors = [
 		'bg-gray-500 dark:bg-gray-400', // 关闭
 		'bg-slate-500 dark:bg-slate-400', // 默认
 		'bg-sky-500 dark:bg-sky-400', // 2K
@@ -101,6 +122,21 @@
 		'bg-orange-500 dark:bg-orange-400', // 32K
 		'bg-red-500 dark:bg-red-400' // 64K
 	];
+	const compactBudgetSliderColors = [
+		'bg-gray-500 dark:bg-gray-400', // 关闭
+		'bg-slate-500 dark:bg-slate-400', // 默认
+		'bg-sky-500 dark:bg-sky-400', // 2K
+		'bg-blue-500 dark:bg-blue-400', // 8K
+		'bg-amber-500 dark:bg-amber-400', // 16K
+		'bg-red-500 dark:bg-red-400' // Max
+	];
+	$: effortSliderColors = anthropicProfile.isAnthropic
+		? compactEffortSliderColors.slice(0, effortSteps.length)
+		: defaultEffortSliderColors.slice(0, effortSteps.length);
+	$: budgetSliderColors =
+		anthropicProfile.isAnthropic && tokenSteps.length <= compactBudgetSliderColors.length
+			? compactBudgetSliderColors.slice(0, tokenSteps.length)
+			: defaultBudgetSliderColors.slice(0, tokenSteps.length);
 
 	$: intensityColor = (() => {
 		if (maxThinkingTokens != null && maxThinkingTokens > 0) {

@@ -16,6 +16,11 @@
 	import { getBackendConfig } from '$lib/apis';
 	import { getNativeToolsConfig, setNativeToolsConfig } from '$lib/apis/configs';
 	import { cloneSettingsSnapshot, isSettingsSnapshotEqual } from '$lib/utils/settings-dirty';
+	import {
+		getAnthropicBudgetSteps,
+		getAnthropicEffortSteps,
+		getAnthropicThinkingProfile
+	} from '$lib/utils/anthropic-thinking';
 	export let models = [];
 	export let chatFiles = [];
 	export let params: Record<string, any> = {};
@@ -291,7 +296,7 @@
 
 	let showValves = false;
 
-	const effortSteps = [
+	const defaultEffortSteps = [
 		{ value: 'none', label: '关闭' },
 		{ value: null, label: '默认' },
 		{ value: 'low', label: 'Low' },
@@ -301,7 +306,7 @@
 		{ value: 'max', label: 'Max' }
 	];
 
-	const tokenSteps = [
+	const defaultTokenSteps = [
 		{ value: 0, label: '关闭' },
 		{ value: null, label: '默认' },
 		{ value: 2048, label: '2K' },
@@ -311,8 +316,13 @@
 		{ value: 65536, label: '64K' }
 	];
 
+	$: primaryThinkingModel = models?.[0] ?? null;
+	$: anthropicThinkingProfile = getAnthropicThinkingProfile(primaryThinkingModel);
+	$: effortSteps = getAnthropicEffortSteps(primaryThinkingModel) ?? defaultEffortSteps;
+	$: tokenSteps = getAnthropicBudgetSteps(primaryThinkingModel) ?? defaultTokenSteps;
+
 	// 滑动条每个 step 的颜色
-	const effortSliderColors = [
+	const defaultEffortSliderColors = [
 		'bg-gray-500 dark:bg-gray-400', // 关闭
 		'bg-slate-500 dark:bg-slate-400', // 默认
 		'bg-sky-500 dark:bg-sky-400', // Low
@@ -321,7 +331,15 @@
 		'bg-orange-500 dark:bg-orange-400', // XHigh
 		'bg-red-500 dark:bg-red-400' // Max
 	];
-	const budgetSliderColors = [
+	const compactEffortSliderColors = [
+		'bg-gray-500 dark:bg-gray-400', // 关闭
+		'bg-slate-500 dark:bg-slate-400', // 默认
+		'bg-sky-500 dark:bg-sky-400', // Low
+		'bg-blue-500 dark:bg-blue-400', // Medium
+		'bg-amber-500 dark:bg-amber-400', // High
+		'bg-red-500 dark:bg-red-400' // Max
+	];
+	const defaultBudgetSliderColors = [
 		'bg-gray-500 dark:bg-gray-400', // 关闭
 		'bg-slate-500 dark:bg-slate-400', // 默认
 		'bg-sky-500 dark:bg-sky-400', // 2K
@@ -330,6 +348,21 @@
 		'bg-orange-500 dark:bg-orange-400', // 32K
 		'bg-red-500 dark:bg-red-400' // 64K
 	];
+	const compactBudgetSliderColors = [
+		'bg-gray-500 dark:bg-gray-400', // 关闭
+		'bg-slate-500 dark:bg-slate-400', // 默认
+		'bg-sky-500 dark:bg-sky-400', // 2K
+		'bg-blue-500 dark:bg-blue-400', // 8K
+		'bg-amber-500 dark:bg-amber-400', // 16K
+		'bg-red-500 dark:bg-red-400' // Max
+	];
+	$: effortSliderColors = anthropicThinkingProfile.isAnthropic
+		? compactEffortSliderColors.slice(0, effortSteps.length)
+		: defaultEffortSliderColors.slice(0, effortSteps.length);
+	$: budgetSliderColors =
+		anthropicThinkingProfile.isAnthropic && tokenSteps.length <= compactBudgetSliderColors.length
+			? compactBudgetSliderColors.slice(0, tokenSteps.length)
+			: defaultBudgetSliderColors.slice(0, tokenSteps.length);
 
 	let customEffortMode = false;
 	let customEffortValue = '';

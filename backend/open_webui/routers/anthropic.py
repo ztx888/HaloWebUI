@@ -24,6 +24,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import math
 import mimetypes
 import os
 import re
@@ -278,15 +279,152 @@ MAX_STREAM_CHUNK_SIZE = 32 * 1024
 # but prevent overriding core/generated fields to avoid breaking Open WebUI's conversion layer.
 _EXTRA_BODY_FORBIDDEN_KEYS = {"model", "messages", "system", "stream"}
 
-def _resolve_thinking_payload(
-    payload: dict, *, max_tokens: Optional[int]
-) -> tuple[Optional[dict], Optional[int], bool]:
-    # Keep thinking explicit-opt-in only: user-specified thinking/reasoning_effort.
-    # When max_tokens is None (user didn't set it), use a generous ceiling for
-    # thinking budget calculations so we don't artificially limit reasoning.
-    _effective_max = max_tokens if max_tokens is not None else 128000
-    reasoning_effort = payload.get("reasoning_effort")
-    effort_to_budget = {
+_ANTHROPIC_FAMILY_FIRST_RE = re.compile(
+    r"(?:^|[^a-z0-9])(?:claude[-_/ ]+)?(?P<family>opus|sonnet|haiku)"
+    r"(?:[-_/ ]+(?P<major>\d))(?:[-_. /]*(?P<minor>\d))?",
+    re.IGNORECASE,
+)
+_ANTHROPIC_VERSION_FIRST_RE = re.compile(
+    r"(?:^|[^a-z0-9])claude(?:[-_/ ]+(?P<major>\d))(?:[-_. /]*(?P<minor>\d))?"
+    r"(?:[-_/ ]+(?P<family>opus|sonnet|haiku))",
+    re.IGNORECASE,
+)
+_ANTHROPIC_MAX_TOKENS_FALLBACK = 8192
+_ANTHROPIC_THINKING_MAX_TOKENS_FALLBACK = 16384
+
+
+def _coerce_positive_int(value: Any) -> Optional[int]:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _normalize_anthropic_model_text(model_id: str) -> str:
+    text = str(model_id or "").strip().lower()
+    text = text.replace("_", "-")
+    text = re.sub(r"(?<=\d)\.(?=\d)", "-", text)
+    text = re.sub(r"\s+", "-", text)
+    return text
+
+
+def _parse_anthropic_model_signature(model_id: str) -> tuple[Optional[str], Optional[int], Optional[int], bool]:
+    text = _normalize_anthropic_model_text(model_id)
+    is_mythos = "mythos" in text
+
+    match = _ANTHROPIC_FAMILY_FIRST_RE.search(text)
+    if not match:
+        match = _ANTHROPIC_VERSION_FIRST_RE.search(text)
+
+    if not match:
+        return None, None, None, is_mythos
+
+    family = (match.group("family") or "").lower() or None
+    major = _coerce_positive_int(match.group("major"))
+    minor = _coerce_positive_int(match.group("minor"))
+    return family, major, minor, is_mythos
+
+
+def _extract_model_meta_output_cap(model_meta: Any) -> Optional[int]:
+    if not isinstance(model_meta, dict):
+        return None
+
+    candidates: list[Any] = [
+        model_meta.get("max_tokens"),
+        model_meta.get("max_output_tokens"),
+        model_meta.get("output_token_limit"),
+    ]
+
+    capabilities = model_meta.get("capabilities")
+    if isinstance(capabilities, dict):
+        candidates.extend(
+            [
+                capabilities.get("max_tokens"),
+                capabilities.get("max_output_tokens"),
+                capabilities.get("output_token_limit"),
+            ]
+        )
+
+    for candidate in candidates:
+        parsed = _coerce_positive_int(candidate)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _build_anthropic_model_profile(model_id: str, model_meta: Any = None) -> dict[str, Any]:
+    family, major, minor, is_mythos = _parse_anthropic_model_signature(model_id)
+    max_output_cap = _extract_model_meta_output_cap(model_meta)
+
+    supports_display = False
+    supports_effort = False
+    prefers_adaptive = False
+
+    if is_mythos:
+        supports_display = True
+        supports_effort = True
+        prefers_adaptive = True
+    elif family in {"sonnet", "opus"} and major == 4 and minor == 6:
+        supports_display = True
+        supports_effort = True
+        prefers_adaptive = True
+    elif major == 4:
+        supports_display = True
+
+    if max_output_cap is None:
+        if family == "opus" and major == 4 and minor == 6:
+            max_output_cap = 128000
+        elif is_mythos:
+            max_output_cap = 64000
+        elif major in {3, 4} or family in {"sonnet", "opus", "haiku"}:
+            max_output_cap = 64000
+        else:
+            max_output_cap = 64000
+
+    return {
+        "family": family,
+        "major": major,
+        "minor": minor,
+        "is_mythos": is_mythos,
+        "supports_display": supports_display,
+        "supports_effort": supports_effort,
+        "prefers_adaptive": prefers_adaptive,
+        "max_output_cap": max_output_cap,
+    }
+
+
+def _normalize_reasoning_effort_value(value: Any) -> tuple[Optional[str], Optional[int]]:
+    if value is None:
+        return None, None
+
+    if isinstance(value, (int, float)):
+        numeric = _coerce_positive_int(value)
+        return None, numeric
+
+    text = str(value).strip().lower()
+    if not text:
+        return None, None
+
+    aliases = {
+        "off": "none",
+        "disabled": "none",
+        "false": "none",
+        "0": "none",
+        "med": "medium",
+        "xh": "xhigh",
+    }
+    text = aliases.get(text, text)
+
+    numeric = _coerce_positive_int(text)
+    if numeric is not None:
+        return None, numeric
+
+    return text, None
+
+
+def _thinking_effort_to_budget_tokens(effort: Optional[str]) -> int:
+    return {
         "none": 0,
         "minimal": 1024,
         "low": 2048,
@@ -294,41 +432,208 @@ def _resolve_thinking_payload(
         "high": 16384,
         "xhigh": 20480,
         "max": 24576,
-    }
+    }.get(str(effort or "").lower(), 8192)
+
+
+def _normalize_effort_for_supported_model(effort: Optional[str]) -> Optional[str]:
+    if effort is None:
+        return None
+
+    text = str(effort).strip().lower()
+    if text in {"", "none"}:
+        return None
+    if text == "minimal":
+        return "low"
+    if text == "xhigh":
+        return "high"
+    if text in {"low", "medium", "high", "max"}:
+        return text
+    return None
+
+
+def _payload_requests_thinking(payload: dict) -> bool:
+    explicit_thinking = payload.get("thinking")
+    if isinstance(explicit_thinking, dict):
+        etype = str(explicit_thinking.get("type") or "").lower()
+        if etype in {"enabled", "adaptive"}:
+            return True
+
+    reasoning_effort, numeric_budget = _normalize_reasoning_effort_value(
+        payload.get("reasoning_effort")
+    )
+    if numeric_budget is not None and numeric_budget > 0:
+        return True
+    return reasoning_effort not in (None, "", "none")
+
+
+def _estimate_requested_thinking_budget(payload: dict) -> Optional[int]:
+    explicit_thinking = payload.get("thinking")
+    if isinstance(explicit_thinking, dict):
+        etype = str(explicit_thinking.get("type") or "").lower()
+        if etype == "enabled":
+            explicit_budget = _coerce_positive_int(explicit_thinking.get("budget_tokens"))
+            return explicit_budget or 8192
+        if etype == "adaptive":
+            return None
+
+    reasoning_effort, numeric_budget = _normalize_reasoning_effort_value(
+        payload.get("reasoning_effort")
+    )
+    if numeric_budget is not None:
+        return numeric_budget
+    if reasoning_effort in (None, "", "none"):
+        return None
+    return _thinking_effort_to_budget_tokens(reasoning_effort)
+
+
+def _resolve_anthropic_max_tokens(payload: dict, model_profile: dict[str, Any]) -> int:
+    max_output_cap = _coerce_positive_int(model_profile.get("max_output_cap")) or 64000
+    requested_max_tokens = _coerce_positive_int(payload.get("max_tokens"))
+    wants_thinking = _payload_requests_thinking(payload)
+
+    if requested_max_tokens is not None:
+        resolved = requested_max_tokens
+    elif wants_thinking:
+        desired_budget = _estimate_requested_thinking_budget(payload)
+        if desired_budget is not None:
+            resolved = max(
+                4096,
+                desired_budget + max(2048, int(math.ceil(desired_budget * 0.25))),
+            )
+        else:
+            reasoning_effort, _ = _normalize_reasoning_effort_value(
+                payload.get("reasoning_effort")
+            )
+            normalized_effort = _normalize_effort_for_supported_model(reasoning_effort)
+            resolved = {
+                "low": 8192,
+                "medium": 16384,
+                "high": 32768,
+                "max": min(max_output_cap, 64000),
+            }.get(
+                normalized_effort,
+                _ANTHROPIC_THINKING_MAX_TOKENS_FALLBACK,
+            )
+    else:
+        resolved = _ANTHROPIC_MAX_TOKENS_FALLBACK
+
+    if wants_thinking and resolved <= 1024:
+        resolved = 2048
+
+    return max(1, min(resolved, max_output_cap))
+
+
+def _normalize_final_anthropic_payload(
+    anthropic_payload: dict, model_profile: dict[str, Any]
+) -> tuple[dict, Optional[int], bool]:
+    payload = dict(anthropic_payload)
+    max_output_cap = _coerce_positive_int(model_profile.get("max_output_cap")) or 64000
+    max_tokens = _coerce_positive_int(payload.get("max_tokens"))
+    if max_tokens is None:
+        max_tokens = min(_ANTHROPIC_MAX_TOKENS_FALLBACK, max_output_cap)
+    if max_tokens <= 0:
+        max_tokens = 1
 
     thinking_budget: Optional[int] = None
+    thinking_enabled = False
+    thinking = payload.get("thinking")
+    if isinstance(thinking, dict):
+        thinking = dict(thinking)
+        etype = str(thinking.get("type") or "").lower()
+        if etype in {"enabled", "adaptive"}:
+            thinking_enabled = True
+
+        if etype == "adaptive" and not model_profile.get("prefers_adaptive"):
+            etype = "enabled"
+            thinking["type"] = "enabled"
+
+        if thinking_enabled and max_tokens <= 1024:
+            max_tokens = min(max_output_cap, 2048)
+
+        if etype == "enabled":
+            raw_budget = _coerce_positive_int(thinking.get("budget_tokens")) or 8192
+            max_budget = max_tokens - 1
+            if max_budget < 1024:
+                max_tokens = min(max_output_cap, max(2048, 1025))
+                max_budget = max_tokens - 1
+            budget_tokens = min(max(raw_budget, 1024), max_budget)
+            thinking["budget_tokens"] = budget_tokens
+            thinking_budget = budget_tokens
+
+        if model_profile.get("supports_display") and thinking_enabled:
+            # Product rule: once the user enables thinking, keep it visible by default.
+            thinking["display"] = "summarized"
+        else:
+            thinking.pop("display", None)
+
+        payload["thinking"] = thinking
+
+    output_config = payload.get("output_config")
+    if isinstance(output_config, dict):
+        if model_profile.get("supports_effort"):
+            normalized_effort = _normalize_effort_for_supported_model(
+                output_config.get("effort")
+            )
+            if normalized_effort:
+                payload["output_config"] = {**output_config, "effort": normalized_effort}
+            else:
+                payload.pop("output_config", None)
+        else:
+            payload.pop("output_config", None)
+
+    payload["max_tokens"] = max_tokens
+    return payload, thinking_budget, thinking_enabled
+
+
+def _resolve_thinking_payload(
+    payload: dict, *, model_profile: dict[str, Any]
+) -> tuple[Optional[dict], Optional[dict], Optional[int], bool]:
     explicit_thinking = payload.get("thinking")
+    thinking_budget: Optional[int] = None
+
     if isinstance(explicit_thinking, dict):
         thinking = dict(explicit_thinking)
         etype = str(thinking.get("type") or "").lower()
-        # Auto-fill budget_tokens if missing (required by Anthropic API)
-        if etype == "enabled" and thinking.get("budget_tokens") is None:
-            thinking["budget_tokens"] = min(10240, _effective_max - 1)
-        if etype == "enabled" and thinking.get("budget_tokens") is not None:
-            try:
-                thinking_budget = int(thinking.get("budget_tokens"))
-            except Exception:
-                thinking_budget = None
-        return thinking, thinking_budget, etype in {"enabled", "adaptive"}
+        if etype == "enabled":
+            explicit_budget = _coerce_positive_int(thinking.get("budget_tokens")) or 8192
+            thinking["budget_tokens"] = explicit_budget
+            thinking_budget = explicit_budget
+        return thinking, None, thinking_budget, etype in {"enabled", "adaptive"}
 
-    if reasoning_effort is not None:
-        if reasoning_effort in effort_to_budget:
-            budget = effort_to_budget[reasoning_effort]
-        else:
-            try:
-                budget = int(reasoning_effort)
-            except (ValueError, TypeError):
-                budget = 8192
-        if budget > 0:
-            thinking_budget = min(budget, _effective_max - 1)
-            return (
-                {"type": "enabled", "budget_tokens": thinking_budget},
-                thinking_budget,
-                True,
-            )
-        return None, None, False
+    reasoning_effort, numeric_budget = _normalize_reasoning_effort_value(
+        payload.get("reasoning_effort")
+    )
 
-    return None, None, False
+    if numeric_budget is not None and numeric_budget > 0:
+        return (
+            {"type": "enabled", "budget_tokens": numeric_budget},
+            None,
+            numeric_budget,
+            True,
+        )
+
+    if reasoning_effort in (None, "", "none"):
+        return None, None, None, False
+
+    if model_profile.get("supports_effort"):
+        normalized_effort = _normalize_effort_for_supported_model(reasoning_effort) or "medium"
+        return (
+            {"type": "adaptive"},
+            {"effort": normalized_effort},
+            None,
+            True,
+        )
+
+    thinking_budget = _thinking_effort_to_budget_tokens(reasoning_effort)
+    if thinking_budget <= 0:
+        return None, None, None, False
+
+    return (
+        {"type": "enabled", "budget_tokens": thinking_budget},
+        None,
+        thinking_budget,
+        True,
+    )
 
 
 def _is_proxy_base_url(base_url: str) -> bool:
@@ -396,11 +701,18 @@ def _apply_cc_format(headers: dict, payload: dict, url: str) -> str:
         "user_id": f"user_{cc_hash}_account__session_{cc_session}"
     }
 
-    # Ensure thinking is adaptive (CC uses adaptive, not enabled with budget)
+    # Ensure thinking is adaptive (CC uses adaptive, not enabled with budget).
+    # Preserve display mode when we already resolved one upstream.
+    thinking_display = None
+    if isinstance(payload.get("thinking"), dict):
+        current_display = payload["thinking"].get("display")
+        if isinstance(current_display, str) and current_display.strip():
+            thinking_display = current_display.strip()
+
     if "thinking" not in payload:
-        payload["thinking"] = {"type": "adaptive"}
+        payload["thinking"] = {"type": "adaptive", **({"display": thinking_display} if thinking_display else {})}
     elif isinstance(payload.get("thinking"), dict):
-        payload["thinking"] = {"type": "adaptive"}
+        payload["thinking"] = {"type": "adaptive", **({"display": thinking_display} if thinking_display else {})}
 
     # Ensure max_tokens is set (CC default)
     if "max_tokens" not in payload:
@@ -554,26 +866,15 @@ def _apply_cc_tool_names(payload: dict) -> dict[str, str]:
     return reverse
 
 
-# Some proxies (e.g. anyrouter) block short model aliases like "claude-opus-4-6" as
-# Claude Code requests while accepting the dated version.  Map known short aliases
-# to their dated equivalents so requests go through cleanly.
-_PROXY_MODEL_ALIASES: dict[str, str] = {
-    "claude-opus-4-6": "claude-opus-4-6-20250918",
-}
-
 def _resolve_proxy_model_alias(model_id: str, base_url: str) -> str:
-    """If talking to a proxy, expand short model aliases to dated versions.
+    """Preserve the upstream model id unless a proxy requires a special case.
 
-    Anyrouter is excluded: it requires short aliases for CC-validated models.
+    Generic proxy-wide model alias rewriting is intentionally disabled because many relays
+    only expose the short alias (e.g. claude-opus-4-6) or their own custom suffixes.
+    Anyrouter keeps its own request-shape compatibility path elsewhere in this router.
     """
     if not _is_proxy_base_url(base_url):
         return model_id
-    if _is_anyrouter_url(base_url):
-        return model_id
-    mapped = _PROXY_MODEL_ALIASES.get(model_id)
-    if mapped:
-        log.info(f"[ANTHROPIC] Proxy model alias: {model_id} -> {mapped}")
-        return mapped
     return model_id
 
 
@@ -1648,12 +1949,24 @@ async def generate_chat_completion(
     url_idx, base_url, key, api_config = _resolve_connection_by_model_id(
         connection_user, payload.get("model", "")
     )
+    request_models = getattr(request.state, "MODELS", None) or request.app.state.MODELS
+    request_model_entry = (
+        request_models.get(payload.get("model", ""))
+        if isinstance(request_models, dict)
+        else None
+    )
     upstream_model_id = _strip_connection_prefix(
         payload.get("model", ""),
         (api_config.get("_resolved_prefix_id") or "").strip() or None,
     )
-    # Expand short model aliases for proxies (e.g. claude-opus-4-6 -> claude-opus-4-6-20250918)
+    # Preserve proxy model ids as-is unless a proxy has an explicit compatibility override.
     upstream_model_id = _resolve_proxy_model_alias(upstream_model_id, base_url)
+    model_profile = _build_anthropic_model_profile(
+        upstream_model_id,
+        (request_model_entry or {}).get("anthropic")
+        if isinstance(request_model_entry, dict)
+        else None,
+    )
 
     if not base_url:
         raise HTTPException(status_code=500, detail="Anthropic base URL not configured")
@@ -1758,24 +2071,22 @@ async def generate_chat_completion(
         else:
             anthropic_messages.insert(0, {"role": "user", "content": attachment_blocks})
 
-    max_tokens = payload.get("max_tokens")
-    # No hardcoded default — if the user didn't set max_tokens, let the
-    # upstream API / proxy decide.  Anthropic's newer models have sensible
-    # built-in defaults; injecting 1024 silently truncated long replies.
+    max_tokens = _resolve_anthropic_max_tokens(payload, model_profile)
 
     anthropic_payload: dict = {
         "model": upstream_model_id,
         "messages": anthropic_messages,
         "stream": stream,
+        "max_tokens": max_tokens,
     }
-    if max_tokens is not None:
-        anthropic_payload["max_tokens"] = max_tokens
 
-    thinking, thinking_budget, thinking_enabled = _resolve_thinking_payload(
-        payload, max_tokens=max_tokens
+    thinking, output_config, thinking_budget, thinking_enabled = _resolve_thinking_payload(
+        payload, model_profile=model_profile
     )
     if thinking is not None:
         anthropic_payload["thinking"] = thinking
+    if output_config is not None:
+        anthropic_payload["output_config"] = output_config
 
     if system:
         anthropic_payload["system"] = system
@@ -1810,6 +2121,10 @@ async def generate_chat_completion(
     anthropic_payload = _merge_extra_body_into_payload(
         anthropic_payload, api_config.get("anthropic_extra_body")
     )
+    anthropic_payload, thinking_budget, thinking_enabled = _normalize_final_anthropic_payload(
+        anthropic_payload, model_profile
+    )
+    max_tokens = anthropic_payload.get("max_tokens")
 
     # Determine required betas (e.g., Files API) and merge with user configured betas.
     required_betas: list[str] = []

@@ -10,77 +10,58 @@ if str(_BACKEND_DIR) not in sys.path:
 from open_webui.routers import anthropic
 
 
+def _profile(model_id: str) -> dict:
+    return anthropic._build_anthropic_model_profile(model_id)
+
+
 def test_resolve_thinking_payload_requires_explicit_opt_in():
-    thinking, budget, enabled = anthropic._resolve_thinking_payload(
-        {}, max_tokens=1024
+    thinking, output_config, budget, enabled = anthropic._resolve_thinking_payload(
+        {}, model_profile=_profile("claude-sonnet-4-6")
     )
     assert thinking is None
+    assert output_config is None
     assert budget is None
     assert enabled is False
 
-    thinking, budget, enabled = anthropic._resolve_thinking_payload(
-        {"thinking": {"type": "enabled"}}, max_tokens=1024
+    thinking, output_config, budget, enabled = anthropic._resolve_thinking_payload(
+        {"thinking": {"type": "enabled"}}, model_profile=_profile("claude-sonnet-4-6")
     )
-    assert thinking == {"type": "enabled", "budget_tokens": 1023}
-    assert budget == 1023
-    assert enabled is True
-
-    thinking, budget, enabled = anthropic._resolve_thinking_payload(
-        {"reasoning_effort": "minimal"}, max_tokens=1024
-    )
-    assert thinking == {"type": "enabled", "budget_tokens": 1023}
-    assert budget == 1023
+    assert thinking == {"type": "enabled", "budget_tokens": 8192}
+    assert output_config is None
+    assert budget == 8192
     assert enabled is True
 
 
-def test_resolve_thinking_payload_none_max_tokens():
-    """When user doesn't set max_tokens, it should use 128000 as ceiling."""
-    thinking, budget, enabled = anthropic._resolve_thinking_payload(
-        {}, max_tokens=None
+def test_resolve_thinking_payload_uses_effort_for_46_models():
+    thinking, output_config, budget, enabled = anthropic._resolve_thinking_payload(
+        {"reasoning_effort": "high"}, model_profile=_profile("claude-sonnet-4-6")
     )
-    assert thinking is None
+    assert thinking == {"type": "adaptive"}
+    assert output_config == {"effort": "high"}
     assert budget is None
-    assert enabled is False
-
-    thinking, budget, enabled = anthropic._resolve_thinking_payload(
-        {"thinking": {"type": "enabled"}}, max_tokens=None
-    )
-    assert thinking == {"type": "enabled", "budget_tokens": 10240}
-    assert budget == 10240
     assert enabled is True
 
-    thinking, budget, enabled = anthropic._resolve_thinking_payload(
-        {"reasoning_effort": "minimal"}, max_tokens=None
+
+def test_resolve_thinking_payload_uses_budget_for_legacy_models():
+    thinking, output_config, budget, enabled = anthropic._resolve_thinking_payload(
+        {"reasoning_effort": "minimal"}, model_profile=_profile("claude-3-7-sonnet")
     )
     assert thinking == {"type": "enabled", "budget_tokens": 1024}
+    assert output_config is None
     assert budget == 1024
     assert enabled is True
 
 
-def test_is_anyrouter_base_url():
-    assert anthropic._is_anyrouter_base_url("https://anyrouter.top/v1") is True
-    assert anthropic._is_anyrouter_base_url("https://api.anthropic.com/v1") is False
+def test_is_anyrouter_url():
+    assert anthropic._is_anyrouter_url("https://anyrouter.top/v1") is True
+    assert anthropic._is_anyrouter_url("https://api.anthropic.com/v1") is False
 
 
-def test_needs_anyrouter_opus_cc_signature():
-    assert (
-        anthropic._needs_anyrouter_opus_cc_signature(
-            "https://anyrouter.top/v1", "claude-opus-4-6"
-        )
-        is True
-    )
-    assert (
-        anthropic._needs_anyrouter_opus_cc_signature(
-            "https://anyrouter.top/v1", "claude-sonnet-4-6"
-        )
-        is False
-    )
-    assert (
-        anthropic._needs_anyrouter_opus_cc_signature(
-            "https://api.anthropic.com/v1", "claude-opus-4-6"
-        )
-        is False
-    )
+def test_needs_cc_format_for_anyrouter_premium_models():
+    assert anthropic._needs_cc_format("claude-opus-4-6", "https://anyrouter.top/v1") is True
+    assert anthropic._needs_cc_format("claude-sonnet-4-6", "https://anyrouter.top/v1") is True
+    assert anthropic._needs_cc_format("claude-haiku-4-5", "https://anyrouter.top/v1") is False
+    assert anthropic._needs_cc_format("claude-opus-4-6", "https://api.anthropic.com/v1") is False
 
 
 def test_resolve_proxy_model_alias_keeps_anyrouter_opus_short_alias():
@@ -92,31 +73,28 @@ def test_resolve_proxy_model_alias_keeps_anyrouter_opus_short_alias():
     )
 
 
-def test_resolve_proxy_model_alias_maps_other_proxies():
+def test_resolve_proxy_model_alias_keeps_other_proxies_unchanged():
     assert (
         anthropic._resolve_proxy_model_alias(
             "claude-opus-4-6", "https://proxy.example.com/v1"
         )
-        == "claude-opus-4-6-20250918"
+        == "claude-opus-4-6"
     )
 
 
-def test_ensure_anyrouter_opus_system_signature_injects_when_missing():
-    out = anthropic._ensure_anyrouter_opus_system_signature(None)
+def test_apply_cc_format_preserves_display_mode():
+    headers = {}
+    payload = {
+        "model": "claude-opus-4-6",
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "hello"}]}],
+        "thinking": {"type": "enabled", "display": "summarized", "budget_tokens": 2048},
+        "metadata": {"user_id": "tester"},
+    }
 
-    assert out[0]["text"] == "You are a Claude agent, built on Anthropic's Claude Agent SDK."
-    assert out[1]["text"] == "Follow the user instructions."
+    url = anthropic._apply_cc_format(headers, payload, "https://anyrouter.top/v1/messages")
 
-
-def test_ensure_anyrouter_opus_system_signature_preserves_existing_and_reorders():
-    src = [
-        {"type": "text", "text": "x-anthropic-billing-header: cc_version=2.1.63;"},
-        {"type": "text", "text": "Use concise answers."},
-        {"type": "text", "text": "Extra context."},
-    ]
-    out = anthropic._ensure_anyrouter_opus_system_signature(src)
-
-    assert out[0]["text"] == "You are a Claude agent, built on Anthropic's Claude Agent SDK."
-    assert out[1]["text"] == "x-anthropic-billing-header: cc_version=2.1.63;"
-    assert out[2]["text"] == "Use concise answers."
-    assert out[3]["text"] == "Extra context."
+    assert payload["thinking"] == {"type": "adaptive", "display": "summarized"}
+    assert payload["max_tokens"] == 32000
+    assert url.endswith("?beta=true")
+    assert headers["x-app"] == "cli"
+    assert headers["User-Agent"].startswith("claude-cli/")

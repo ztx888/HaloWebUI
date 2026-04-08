@@ -62,9 +62,9 @@ the backend now normalizes `system` blocks before sending upstream:
 - `system[1].text` is guaranteed non-empty (fallback: `Follow the user instructions.`)
 - existing later `system` content is preserved
 
-Also, for this exact Anyrouter+Opus case, we intentionally do **not** map model id to
-`claude-opus-4-6-20250918` (dated alias), because that path can hit separate upstream
-capacity limits and is not the same failure mode.
+Also, model ids are now preserved as configured for Anthropic proxies by default.
+We do **not** rewrite `claude-opus-4-6` to a dated alias like `claude-opus-4-6-20250918`,
+because many relays only expose the short alias or their own custom suffixes.
 
 ### Maintenance Note
 

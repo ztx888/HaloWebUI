@@ -1382,7 +1382,11 @@
 												{/if}
 											{/if}
 
-											<ThinkingControl bind:reasoningEffort bind:maxThinkingTokens />
+											<ThinkingControl
+												bind:reasoningEffort
+												bind:maxThinkingTokens
+												model={primarySelectedModel}
+											/>
 										</div>
 									</div>
 

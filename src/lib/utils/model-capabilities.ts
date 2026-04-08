@@ -1,3 +1,5 @@
+import { getAnthropicThinkingProfile } from './anthropic-thinking';
+
 /**
  * 模型能力推断工具
  * 根据模型名称自动推断其支持的能力
@@ -80,6 +82,11 @@ function inferVision(id: string): boolean {
 
 // 推理/思考能力推断
 function inferReasoning(id: string): boolean {
+	const anthropicProfile = getAnthropicThinkingProfile({ id, owned_by: 'anthropic' });
+	if (anthropicProfile.supportsThinking) {
+		return true;
+	}
+
 	const reasoningPatterns = [
 		'o1', // OpenAI o1 系列
 		'o3', // OpenAI o3 系列
@@ -93,8 +100,10 @@ function inferReasoning(id: string): boolean {
 		'skywork-o1',
 		'claude-3-5-sonnet', // Claude 3.5 Sonnet (extended thinking)
 		'claude-3.5-sonnet',
+		'claude-3-7-sonnet',
 		'claude-sonnet-4', // Claude Sonnet 4
 		'claude-opus-4', // Claude Opus 4
+		'claude-haiku-4',
 		'claude-4' // Claude 4 系列
 	];
 
