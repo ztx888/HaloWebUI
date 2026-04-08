@@ -299,8 +299,8 @@
 			transport_type,
 			url: url.trim().replace(/\/$/, ''),
 			command: command.trim(),
-			args: normalizedArgs,
-			env: normalizedEnvMap,
+			args: normalizeArgs(),
+			env: normalizeEnv(),
 			auth_type: transport_type === 'http' ? auth_type : 'none',
 			headers: transport_type === 'http' ? preparedHeaders.signature : [],
 			key:
@@ -333,6 +333,8 @@
 	};
 
 	const buildConnectionPayload = ({ persistVerify }: { persistVerify: boolean }) => {
+		const currentArgs = normalizeArgs();
+		const currentEnv = normalizeEnv();
 		const base: any = {
 			transport_type,
 			name: name.trim() || undefined,
@@ -351,8 +353,8 @@
 			}
 		} else {
 			base.command = command.trim();
-			base.args = normalizedArgs;
-			base.env = normalizedEnvMap;
+			base.args = currentArgs;
+			base.env = currentEnv;
 		}
 
 		if (persistVerify) {
