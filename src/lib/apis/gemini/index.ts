@@ -132,3 +132,41 @@ export const verifyGeminiConnection = async (
 
 	return res;
 };
+
+export const healthCheckGeminiConnection = async (
+	token: string = '',
+	connection: { url: string; key: string; config?: object; model?: string }
+) => {
+	const { url, key, config, model } = connection;
+	if (!url) {
+		throw 'Gemini: URL is required';
+	}
+
+	let error = null;
+
+	const res = await fetch(`${GEMINI_API_BASE_URL}/health_check`, {
+		method: 'POST',
+		headers: {
+			Accept: 'application/json',
+			Authorization: `Bearer ${token}`,
+			'Content-Type': 'application/json'
+		},
+		body: JSON.stringify({
+			url,
+			key,
+			config,
+			model
+		})
+	})
+		.then(parseJsonResponse)
+		.catch((err) => {
+			error = `Gemini: ${err?.detail ?? err?.error?.message ?? err?.message ?? 'Network Problem'}`;
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};

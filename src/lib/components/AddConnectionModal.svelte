@@ -7,9 +7,9 @@
 	const i18n = getContext('i18n') as Writable<i18nType>;
 
 	import { healthCheckOpenAIConnection, verifyOpenAIConnection } from '$lib/apis/openai';
-	import { verifyOllamaConnection } from '$lib/apis/ollama';
-	import { verifyGeminiConnection } from '$lib/apis/gemini';
-	import { verifyAnthropicConnection } from '$lib/apis/anthropic';
+	import { healthCheckOllamaConnection, verifyOllamaConnection } from '$lib/apis/ollama';
+	import { healthCheckGeminiConnection, verifyGeminiConnection } from '$lib/apis/gemini';
+	import { healthCheckAnthropicConnection, verifyAnthropicConnection } from '$lib/apis/anthropic';
 
 	import Modal from '$lib/components/common/Modal.svelte';
 	import ConnectionAvatarPicker from '$lib/components/common/ConnectionAvatarPicker.svelte';
@@ -186,6 +186,24 @@
 		responseTimeMs?: number;
 		detail?: string;
 	};
+
+	type ProviderHealthCheckRequest =
+		| {
+				provider: 'openai';
+				connection: { url: string; key: string; config?: object };
+		  }
+		| {
+				provider: 'gemini';
+				connection: { url: string; key: string; config?: object };
+		  }
+		| {
+				provider: 'anthropic';
+				connection: { url: string; key: string; config?: object };
+		  }
+		| {
+				provider: 'ollama';
+				connection: { url: string; key?: string; config?: object };
+		  };
 
 	const BATCH_HEALTH_CHECK_DELAY_MS = 300;
 
@@ -530,6 +548,81 @@
 		};
 	};
 
+	const buildGeminiHealthCheckPayload = () => {
+		const parsedGeminiHeaders = parseHeadersInput();
+		if (headers && parsedGeminiHeaders === null) return null;
+
+		return {
+			url: normalizedUrl,
+			key,
+			config: {
+				auth_type,
+				...(prefixId.trim() ? { prefix_id: prefixId.trim() } : {}),
+				...(parsedGeminiHeaders ? { headers: parsedGeminiHeaders } : {})
+			}
+		};
+	};
+
+	const buildAnthropicHealthCheckPayload = () => {
+		const parsedAnthropicHeaders = parseHeadersInput();
+		if (headers && parsedAnthropicHeaders === null) return null;
+		if (anthropicExtraBody && !parsedAnthropicExtraBody) {
+			toast.error($i18n.t('Anthropic extra params must be a valid JSON object'));
+			return null;
+		}
+
+		return {
+			url: normalizedUrl,
+			key,
+			config: {
+				auth_type,
+				...(prefixId.trim() ? { prefix_id: prefixId.trim() } : {}),
+				anthropic_version: anthropicVersion,
+				anthropic_beta: anthropicBetas.map((b) => b.name).filter((b) => b.trim()),
+				use_files_api: useFilesApi,
+				files_auto_attach: filesAutoAttach,
+				files_cache_ttl: filesCacheTtl,
+				files_citations: filesCitations,
+				...(parsedAnthropicExtraBody
+					? { anthropic_extra_body: parsedAnthropicExtraBody }
+					: {}),
+				...(parsedAnthropicHeaders ? { headers: parsedAnthropicHeaders } : {})
+			}
+		};
+	};
+
+	const buildOllamaHealthCheckPayload = () => ({
+		url: normalizedUrl,
+		key,
+		config: {
+			...(prefixId.trim() ? { prefix_id: prefixId.trim() } : {})
+		}
+	});
+
+	const buildHealthCheckRequest = (): ProviderHealthCheckRequest | null => {
+		if (direct) return null;
+
+		if (ollama) {
+			return {
+				provider: 'ollama',
+				connection: buildOllamaHealthCheckPayload()
+			};
+		}
+
+		if (gemini) {
+			const connection = buildGeminiHealthCheckPayload();
+			return connection ? { provider: 'gemini', connection } : null;
+		}
+
+		if (anthropic) {
+			const connection = buildAnthropicHealthCheckPayload();
+			return connection ? { provider: 'anthropic', connection } : null;
+		}
+
+		const connection = buildOpenAIHealthCheckPayload();
+		return connection ? { provider: 'openai', connection } : null;
+	};
+
 	const verifyOllamaHandler = async () => {
 		const verifyUrl = normalizedUrl;
 
@@ -572,21 +665,39 @@
 		modelId: string,
 		options: {
 			silentToast?: boolean;
-			healthCheckPayload?: ReturnType<typeof buildOpenAIHealthCheckPayload>;
+			healthCheckRequest?: ProviderHealthCheckRequest;
 		} = {}
 	) => {
-		if (!modelId || direct || ollama || gemini || anthropic) return false;
+		if (!modelId || direct) return false;
 
-		const payload = options.healthCheckPayload ?? buildOpenAIHealthCheckPayload();
-		if (!payload) return false;
+		const request = options.healthCheckRequest ?? buildHealthCheckRequest();
+		if (!request) return false;
 
 		updateModelHealthState(modelId, { status: 'testing' });
 
 		try {
-			const result = await healthCheckOpenAIConnection(localStorage.token, {
-				...payload,
-				model: modelId
-			});
+			let result;
+			if (request.provider === 'openai') {
+				result = await healthCheckOpenAIConnection(localStorage.token, {
+					...request.connection,
+					model: modelId
+				});
+			} else if (request.provider === 'gemini') {
+				result = await healthCheckGeminiConnection(localStorage.token, {
+					...request.connection,
+					model: modelId
+				});
+			} else if (request.provider === 'anthropic') {
+				result = await healthCheckAnthropicConnection(localStorage.token, {
+					...request.connection,
+					model: modelId
+				});
+			} else {
+				result = await healthCheckOllamaConnection(localStorage.token, {
+					...request.connection,
+					model: modelId
+				});
+			}
 
 			updateModelHealthState(modelId, {
 				status: 'success',
@@ -622,12 +733,12 @@
 	};
 
 	const runBatchHealthCheck = async () => {
-		if (modelIds.length === 0 || batchHealthChecking || direct || ollama || gemini || anthropic) {
+		if (modelIds.length === 0 || batchHealthChecking || direct) {
 			return;
 		}
 
-		const sharedPayload = buildOpenAIHealthCheckPayload();
-		if (!sharedPayload) return;
+		const sharedRequest = buildHealthCheckRequest();
+		if (!sharedRequest) return;
 
 		batchHealthChecking = true;
 		batchHealthProgress = { current: 0, total: modelIds.length };
@@ -646,7 +757,7 @@
 				batchHealthProgress = { current: index + 1, total: modelIds.length };
 				const ok = await runModelHealthCheck(modelId, {
 					silentToast: true,
-					healthCheckPayload: sharedPayload
+					healthCheckRequest: sharedRequest
 				});
 
 				if (ok) {
@@ -704,13 +815,24 @@
 		const nextContextKey = JSON.stringify({
 			url: normalizedUrl,
 			key,
+			ollama,
+			gemini,
+			anthropic,
 			auth_type,
+			prefixId,
 			azure,
 			apiVersion,
 			headers,
 			isForceMode,
 			useResponsesApi,
-			modelIds
+			modelIds,
+			anthropicVersion,
+			anthropicBetas,
+			useFilesApi,
+			filesAutoAttach,
+			filesCacheTtl,
+			filesCitations,
+			anthropicExtraBody
 		});
 
 		if (modelHealthContextKey && modelHealthContextKey !== nextContextKey) {
@@ -1390,7 +1512,7 @@
 									{/if}
 								</div>
 								<div class="flex items-center gap-2">
-									{#if !ollama && !gemini && !anthropic && !direct}
+									{#if !direct}
 										<Tooltip
 											content={modelIds.length === 0
 												? $i18n.t('Please add models in Model Management')
@@ -1438,7 +1560,7 @@
 											<Tooltip content={getModelNameTooltip(modelId)}>
 												<span class="truncate max-w-28">{modelId}</span>
 											</Tooltip>
-											{#if !ollama && !gemini && !anthropic && !direct}
+											{#if !direct}
 												<Tooltip content={getModelHealthActionTooltip(modelId)}>
 													<button
 														type="button"
@@ -1462,7 +1584,7 @@
 										</div>
 									{/each}
 								</div>
-								{#if !ollama && !gemini && !anthropic && !direct}
+								{#if !direct}
 									<div class="text-xs text-gray-400">
 										{$i18n.t('Single model tests use the chip action. Batch tests run sequentially to reduce rate-limit risk.')}
 									</div>

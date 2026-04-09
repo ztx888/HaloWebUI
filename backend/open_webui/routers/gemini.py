@@ -1369,6 +1369,34 @@ class ConnectionVerificationForm(BaseModel):
     config: Optional[dict] = None
 
 
+class HealthCheckForm(BaseModel):
+    url: str
+    key: str = ""
+    config: Optional[dict] = None
+    model: Optional[str] = None
+
+
+def _strip_gemini_model_prefix(model_id: str, api_config: Optional[dict]) -> str:
+    resolved_prefix = (
+        (api_config or {}).get("_resolved_prefix_id")
+        or (api_config or {}).get("prefix_id")
+        or ""
+    ).strip()
+    if resolved_prefix and isinstance(model_id, str) and model_id.startswith(f"{resolved_prefix}."):
+        return model_id[len(resolved_prefix) + 1 :]
+    return model_id
+
+
+async def _read_gemini_upstream_body(response: aiohttp.ClientResponse):
+    try:
+        return await response.json(content_type=None)
+    except Exception:
+        try:
+            return await response.text()
+        except Exception:
+            return None
+
+
 @router.post("/verify")
 async def verify_connection(
     request: Request,
@@ -1418,6 +1446,100 @@ async def verify_connection(
             status_code=500,
             detail=build_error_detail(e, prefix="Gemini"),
         )
+
+
+@router.post("/health_check")
+async def health_check_connection(
+    form_data: HealthCheckForm,
+    user=Depends(get_verified_user),
+):
+    url = (form_data.url or "").rstrip("/")
+    if not url:
+        raise HTTPException(status_code=400, detail="URL is required")
+
+    key = form_data.key or ""
+    config = form_data.config or {}
+
+    chosen_model = form_data.model
+    if not chosen_model:
+        response = await send_get_request(f"{url}/models", key, config)
+        if response is None:
+            raise HTTPException(
+                status_code=500,
+                detail="Gemini: Connection to upstream server failed",
+            )
+        if "error" in response:
+            raise HTTPException(
+                status_code=response.get("error", {}).get("code", 500),
+                detail=response.get("error", {}).get("message", "Unknown error"),
+            )
+
+        models = response.get("models") if isinstance(response, dict) else None
+        if isinstance(models, list):
+            for model in models:
+                if not isinstance(model, dict):
+                    continue
+                supported_methods = model.get("supportedGenerationMethods", [])
+                if "generateContent" not in supported_methods:
+                    continue
+                chosen_model = model.get("name", "").replace("models/", "")
+                if chosen_model:
+                    break
+
+    if not chosen_model:
+        raise HTTPException(status_code=400, detail="Gemini: No compatible model found")
+
+    chosen_model = _strip_gemini_model_prefix(str(chosen_model), config)
+    if chosen_model.startswith("models/"):
+        chosen_model = chosen_model[len("models/") :]
+
+    request_url = f"{url}/models/{chosen_model}:generateContent"
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": "Hi"}]}],
+        "generationConfig": {"maxOutputTokens": 16},
+    }
+
+    timeout = aiohttp.ClientTimeout(total=15)
+    last_status = None
+    last_body = None
+    started_at = time.monotonic()
+    try:
+        async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
+            for full_url, headers in _auth_attempts(request_url, key or "", config):
+                async with session.post(full_url, headers=headers, json=payload) as response:
+                    body = await _read_gemini_upstream_body(response)
+                    if response.status < 400 and isinstance(body, dict):
+                        return {
+                            "ok": True,
+                            "model": chosen_model,
+                            "response_time_ms": max(
+                                1, int((time.monotonic() - started_at) * 1000)
+                            ),
+                        }
+                    last_status = response.status
+                    last_body = body
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception(f"Unexpected error: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=build_error_detail(e, prefix="Gemini"),
+        )
+
+    status = last_status or 500
+    if isinstance(last_body, dict):
+        error = last_body.get("error")
+        if isinstance(error, dict) and error.get("message"):
+            raise HTTPException(status_code=status, detail=str(error.get("message")))
+    raise HTTPException(
+        status_code=status,
+        detail=_format_gemini_upstream_error(
+            request_url=request_url,
+            status=status,
+            body=last_body,
+        ),
+    )
 
 
 @router.post("/chat/completions")

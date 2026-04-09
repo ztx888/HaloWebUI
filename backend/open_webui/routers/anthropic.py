@@ -1124,6 +1124,13 @@ class ConnectionVerificationForm(BaseModel):
     config: Optional[dict] = None
 
 
+class HealthCheckForm(BaseModel):
+    url: str
+    key: str = ""
+    config: Optional[dict] = None
+    model: Optional[str] = None
+
+
 @router.post("/verify")
 async def verify_connection(
     request: Request, form_data: ConnectionVerificationForm, user=Depends(get_verified_user)
@@ -1134,6 +1141,102 @@ async def verify_connection(
 
     try:
         return await send_get_request(f"{url}/models", key, cfg)
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception(f"Unexpected error: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=build_error_detail(e, prefix="Anthropic"),
+        )
+
+
+@router.post("/health_check")
+async def health_check_connection(
+    form_data: HealthCheckForm, user=Depends(get_verified_user)
+):
+    url = (form_data.url or "").rstrip("/")
+    if not url:
+        raise HTTPException(status_code=400, detail="URL is required")
+
+    key = form_data.key or ""
+    cfg = form_data.config or {}
+
+    chosen_model = form_data.model
+    if not chosen_model:
+        response = await send_get_request(f"{url}/models", key, cfg)
+        models = response.get("data") if isinstance(response, dict) else None
+        if isinstance(models, list):
+            for model in models:
+                if isinstance(model, dict) and model.get("id"):
+                    chosen_model = model.get("id")
+                    break
+
+    if not chosen_model:
+        raise HTTPException(status_code=400, detail="Anthropic: No compatible model found")
+
+    resolved_prefix = (cfg.get("_resolved_prefix_id") or cfg.get("prefix_id") or "").strip() or None
+    chosen_model = _strip_connection_prefix(str(chosen_model), resolved_prefix)
+    chosen_model = _resolve_proxy_model_alias(chosen_model, url)
+
+    payload = {
+        "model": chosen_model,
+        "messages": [{"role": "user", "content": "Hi"}],
+        "stream": False,
+        "max_tokens": 16,
+    }
+    payload = _merge_extra_body_into_payload(payload, cfg.get("anthropic_extra_body"))
+
+    headers = _build_anthropic_headers(
+        key,
+        cfg,
+        accept="application/json",
+        content_type="application/json",
+    )
+    request_url = f"{url}/messages"
+    timeout = aiohttp.ClientTimeout(total=15)
+    started_at = time.monotonic()
+
+    try:
+        async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
+            async with _post_preserve_method(
+                session, request_url, json_data=payload, headers=headers
+            ) as response:
+                try:
+                    body = await response.json(content_type=None)
+                except Exception:
+                    body = await response.text()
+
+                if response.status >= 400:
+                    if isinstance(body, dict):
+                        error = body.get("error")
+                        if isinstance(error, dict) and error.get("message"):
+                            raise HTTPException(
+                                status_code=response.status,
+                                detail=str(error.get("message")),
+                            )
+                    raise HTTPException(
+                        status_code=response.status,
+                        detail=_format_anthropic_upstream_error(
+                            request_url=request_url,
+                            status=response.status,
+                            body=body,
+                        ),
+                    )
+
+                if not isinstance(body, dict):
+                    raise HTTPException(
+                        status_code=502,
+                        detail="Invalid response from Anthropic model health check",
+                    )
+
+                return {
+                    "ok": True,
+                    "model": chosen_model,
+                    "response_time_ms": max(
+                        1, int((time.monotonic() - started_at) * 1000)
+                    ),
+                }
     except HTTPException:
         raise
     except Exception as e:

@@ -280,6 +280,13 @@ class ConnectionVerificationForm(BaseModel):
     key: Optional[str] = None
 
 
+class HealthCheckForm(BaseModel):
+    url: str
+    key: Optional[str] = None
+    config: Optional[dict] = None
+    model: Optional[str] = None
+
+
 @router.post("/verify")
 async def verify_connection(
     form_data: ConnectionVerificationForm, user=Depends(get_verified_user)
@@ -364,6 +371,113 @@ async def verify_connection(
             log.exception(f"Unexpected error: {e}")
             error_detail = f"Unexpected error: {str(e)}"
             raise HTTPException(status_code=500, detail=error_detail)
+
+
+@router.post("/health_check")
+async def health_check_connection(
+    form_data: HealthCheckForm, user=Depends(get_verified_user)
+):
+    url = (form_data.url or "").rstrip("/")
+    if not url:
+        raise HTTPException(status_code=400, detail="URL is required")
+
+    key = form_data.key
+    api_config = form_data.config or {}
+    chosen_model = form_data.model
+    timeout = aiohttp.ClientTimeout(total=15)
+
+    headers = {
+        "Content-Type": "application/json",
+        **({"Authorization": f"Bearer {key}"} if key else {}),
+        **(
+            {
+                "X-OpenWebUI-User-Name": user.name,
+                "X-OpenWebUI-User-Id": user.id,
+                "X-OpenWebUI-User-Email": user.email,
+                "X-OpenWebUI-User-Role": user.role,
+            }
+            if ENABLE_FORWARD_USER_INFO_HEADERS and user
+            else {}
+        ),
+    }
+
+    try:
+        async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
+            if not chosen_model:
+                async with session.get(f"{url}/api/tags", headers=headers) as response:
+                    body = await read_aiohttp_error_payload(response)
+                    if response.status >= 400:
+                        raise HTTPException(
+                            status_code=response.status,
+                            detail=_format_ollama_error_detail(body),
+                        )
+
+                    if isinstance(body, dict) and isinstance(body.get("models"), list):
+                        for model in body["models"]:
+                            if not isinstance(model, dict):
+                                continue
+                            chosen_model = model.get("model") or model.get("name")
+                            if chosen_model:
+                                break
+
+            if not chosen_model:
+                raise HTTPException(status_code=400, detail="Ollama: No compatible model found")
+
+            chosen_model = str(chosen_model)
+            resolved_prefix = (api_config.get("_resolved_prefix_id") or api_config.get("prefix_id") or "").strip() or None
+            if resolved_prefix and chosen_model.startswith(f"{resolved_prefix}."):
+                chosen_model = chosen_model[len(resolved_prefix) + 1 :]
+            if ":" not in chosen_model and "/" not in chosen_model:
+                chosen_model = f"{chosen_model}:latest"
+
+            payload = {
+                "model": chosen_model,
+                "messages": [{"role": "user", "content": "Hi"}],
+                "stream": False,
+                "options": {"num_predict": 1},
+            }
+
+            started_at = time.monotonic()
+            async with session.post(
+                f"{url}/api/chat",
+                data=json.dumps(payload),
+                headers=headers,
+            ) as response:
+                try:
+                    body = await response.json(content_type=None)
+                except Exception:
+                    body = await response.text()
+
+                if response.status >= 400:
+                    raise HTTPException(
+                        status_code=response.status,
+                        detail=_format_ollama_error_detail(body),
+                    )
+
+                if not isinstance(body, dict):
+                    raise HTTPException(
+                        status_code=502,
+                        detail="Invalid response from Ollama model health check",
+                    )
+
+                return {
+                    "ok": True,
+                    "model": chosen_model,
+                    "response_time_ms": max(
+                        1, int((time.monotonic() - started_at) * 1000)
+                    ),
+                }
+    except HTTPException:
+        raise
+    except aiohttp.ClientError as e:
+        log.exception(f"Client error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=_format_ollama_error_detail(error=e),
+        )
+    except Exception as e:
+        log.exception(f"Unexpected error: {e}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 
 @router.get("/config")
