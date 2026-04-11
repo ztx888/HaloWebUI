@@ -39,6 +39,7 @@
 	let delayedAnimated = false;
 	let delayedAnimatedTimer: ReturnType<typeof setTimeout> | null = null;
 	let lastLexedContent = '';
+	let effectiveTransitionMode: ChatTransitionMode = transitionMode;
 
 	let smoothStreamController = createSmoothStreamContentController({
 		enabled: false,
@@ -125,13 +126,22 @@
 			)
 		: '';
 
-	$: syncDelayedAnimated(streaming && transitionMode !== 'none');
+	const hasStreamingReasoningDetails = (value: string) =>
+		/<details\b[^>]*type="reasoning"[^>]*done="false"/i.test(value);
+
+	// Reasoning summaries stream as full <details> snapshots, not plain text appends.
+	// Bypass transition effects for these structured blocks so the expanded thinking body
+	// can refresh immediately as each backend delta arrives.
+	$: effectiveTransitionMode =
+		streaming && hasStreamingReasoningDetails(processedContent) ? 'none' : transitionMode;
+
+	$: syncDelayedAnimated(streaming && effectiveTransitionMode !== 'none');
 	$: renderTransitionMode =
-		transitionMode !== 'none' && delayedAnimated ? transitionMode : 'none';
+		effectiveTransitionMode !== 'none' && delayedAnimated ? effectiveTransitionMode : 'none';
 
 	// Rebuild controller when preset changes
 	$: {
-		const nextPreset = transitionMode === 'smooth' ? 'silky' : 'balanced';
+		const nextPreset = effectiveTransitionMode === 'smooth' ? 'silky' : 'balanced';
 		const currentContent = smoothStreamController.getDisplayedContent();
 		smoothStreamController.destroy();
 		smoothStreamController = createSmoothStreamContentController({

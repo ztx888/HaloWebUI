@@ -40,6 +40,29 @@
 	export let charAnimation = false;
 	export let pathPrefix: number[] = [];
 
+	let detailsOpenState = new Map<string, boolean>();
+
+	const getDetailsStateKey = (token: any, tokenIdx: number) =>
+		[messageId, ...pathPrefix, tokenIdx, token?.attributes?.type ?? '', token?.summary ?? ''].join(
+			':'
+		);
+
+	const getDefaultDetailsOpen = (token: any) =>
+		token?.attributes?.type === 'error' || token?.attributes?.type === 'warning'
+			? true
+			: ($settings?.expandDetails ?? false);
+
+	const getDetailsOpen = (token: any, tokenIdx: number) => {
+		const key = getDetailsStateKey(token, tokenIdx);
+		return detailsOpenState.has(key)
+			? (detailsOpenState.get(key) ?? false)
+			: getDefaultDetailsOpen(token);
+	};
+
+	const setDetailsOpen = (token: any, tokenIdx: number, open: boolean) => {
+		detailsOpenState.set(getDetailsStateKey(token, tokenIdx), open);
+	};
+
 	const headerComponent = (depth: number) => {
 		return 'h' + depth;
 	};
@@ -325,12 +348,13 @@
 		{:else if token.type === 'details'}
 			<Collapsible
 				title={token.summary}
-				open={token?.attributes?.type === 'error' || token?.attributes?.type === 'warning'
-					? true
-					: ($settings?.expandDetails ?? false)}
+				open={getDetailsOpen(token, tokenIdx)}
 				attributes={token?.attributes}
 				className="w-full space-y-1"
 				dir="auto"
+				on:change={(e) => {
+					setDetailsOpen(token, tokenIdx, e.detail);
+				}}
 			>
 				<div class=" mb-1.5" slot="content">
 					<svelte:self

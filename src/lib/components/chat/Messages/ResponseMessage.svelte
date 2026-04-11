@@ -148,6 +148,9 @@
 	}
 
 	$: hasVisibleAssistantOutput = getVisibleAssistantOutput(message?.content ?? '') !== '';
+	$: hasVisibleThinkingOutput =
+		/<details\b[^>]*type="reasoning"/i.test(message?.content ?? '') ||
+		/<(think|thinking|reasoning)\b[^>]*>/i.test(message?.content ?? '');
 	$: displayStatusHistory = (
 		message?.statusHistory ?? [...(message?.status ? [message?.status] : [])]
 	).filter((status) => {
@@ -1054,7 +1057,7 @@
 										class="w-full flex flex-col relative {!message.done ? 'streaming-fade' : ''}"
 										id="response-content-container"
 									>
-										{#if !message.done && !message.error && !hasVisibleAssistantOutput}
+										{#if !message.done && !message.error && !hasVisibleAssistantOutput && !hasVisibleThinkingOutput}
 											<!-- Keep the waiting indicator visible even before backend status steps arrive -->
 											<ThinkingIndicator
 												statusHistory={displayStatusHistory}
