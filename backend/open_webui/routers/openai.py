@@ -77,6 +77,15 @@ OPENAI_CHAT_COMPLETIONS_SUFFIX = "/chat/completions"
 AZURE_OPENAI_V1_SEGMENT = "/openai/v1"
 AZURE_OPENAI_DEPLOYMENTS_SEGMENT = "/openai/deployments/"
 
+NATIVE_FILE_INPUT_STATUS_SUPPORTED = "supported"
+NATIVE_FILE_INPUT_STATUS_DISABLED_BY_CONFIG = "disabled_by_config"
+NATIVE_FILE_INPUT_STATUS_PROTOCOL_NOT_ATTEMPTED = "protocol_not_attempted"
+NATIVE_FILE_INPUT_STATUS_UPLOAD_FAILED = "upload_failed"
+NATIVE_FILE_INPUT_STATUS_UPSTREAM_REJECTED = "upstream_rejected"
+
+_NATIVE_FILE_INPUT_PROBE_TTL_SECONDS = 60
+_NATIVE_FILE_INPUT_PROBE_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+
 
 def _is_official_openai_connection(url: str) -> bool:
     try:
@@ -451,14 +460,17 @@ def _should_use_responses_api(
     api_config: Optional[dict],
     model_id: Optional[str],
     native_web_search: bool = False,
+    native_file_inputs: bool = False,
 ) -> bool:
     cfg = api_config or {}
     if _is_azure_openai_connection(url, cfg):
         return False
-    use_responses_api = bool(cfg.get("use_responses_api", False) or native_web_search)
+    use_responses_api = bool(
+        cfg.get("use_responses_api", False) or native_web_search or native_file_inputs
+    )
     if _is_force_mode_connection(url, cfg):
         return False
-    if use_responses_api and not native_web_search:
+    if use_responses_api and not native_web_search and not native_file_inputs:
         exclude_patterns = cfg.get("responses_api_exclude_patterns", [])
         if isinstance(exclude_patterns, list):
             model_lower = (model_id or "").lower()
@@ -472,22 +484,91 @@ def _should_use_responses_api(
     return use_responses_api
 
 
+def _get_native_file_input_capability(
+    url: str, api_config: Optional[dict]
+) -> dict[str, Any]:
+    cfg = api_config or {}
+    explicit = cfg.get("native_file_inputs_enabled")
+    responses_configured = _coerce_bool(cfg.get("use_responses_api"), False)
+    official = _is_official_openai_connection(url)
+
+    capability: dict[str, Any] = {
+        "status": NATIVE_FILE_INPUT_STATUS_SUPPORTED,
+        "reason": "supported",
+        "message": "Native file inputs can be attempted for this connection.",
+        "official": official,
+        "responses_configured": responses_configured,
+        "force_responses_required": not responses_configured,
+    }
+
+    if _is_azure_openai_connection(url, cfg):
+        capability.update(
+            {
+                "status": NATIVE_FILE_INPUT_STATUS_PROTOCOL_NOT_ATTEMPTED,
+                "reason": "azure_connection",
+                "message": (
+                    "The current Azure OpenAI connection does not expose the OpenAI "
+                    "Files/Responses protocol required for native file inputs."
+                ),
+                "force_responses_required": False,
+            }
+        )
+        return capability
+
+    if _is_force_mode_connection(url, cfg):
+        capability.update(
+            {
+                "status": NATIVE_FILE_INPUT_STATUS_PROTOCOL_NOT_ATTEMPTED,
+                "reason": "force_mode_connection",
+                "message": (
+                    "The current force-mode connection cannot auto-route through the "
+                    "OpenAI Files/Responses protocol required for native file inputs."
+                ),
+                "force_responses_required": False,
+            }
+        )
+        return capability
+
+    if explicit is not None:
+        if _coerce_bool(explicit, False):
+            capability["reason"] = "explicitly_enabled"
+            return capability
+
+        capability.update(
+            {
+                "status": NATIVE_FILE_INPUT_STATUS_DISABLED_BY_CONFIG,
+                "reason": "disabled_by_config",
+                "message": "Native file inputs are disabled for the current connection.",
+                "force_responses_required": False,
+            }
+        )
+        return capability
+
+    if official:
+        capability["reason"] = "official_openai_default"
+        return capability
+
+    capability.update(
+        {
+            "status": NATIVE_FILE_INPUT_STATUS_DISABLED_BY_CONFIG,
+            "reason": "third_party_opt_in_required",
+            "message": (
+                "Native file inputs are not enabled for this third-party "
+                "OpenAI-compatible connection."
+            ),
+            "force_responses_required": False,
+        }
+    )
+    return capability
+
+
 def _connection_supports_native_file_inputs(
     url: str, api_config: Optional[dict]
 ) -> bool:
-    cfg = api_config or {}
-    if cfg.get("azure"):
-        return False
-    if _is_force_mode_connection(url, cfg):
-        return False
-    if not _coerce_bool(cfg.get("use_responses_api"), False):
-        return False
-
-    explicit = cfg.get("native_file_inputs_enabled")
-    if explicit is not None:
-        return _coerce_bool(explicit, False)
-
-    return _is_official_openai_connection(url)
+    return (
+        _get_native_file_input_capability(url, api_config).get("status")
+        == NATIVE_FILE_INPUT_STATUS_SUPPORTED
+    )
 
 
 def _get_default_responses_reasoning_summary(
@@ -970,6 +1051,118 @@ def _looks_like_responses_endpoint_unsupported(status: int, body_text: str) -> b
     if "unsupported" in text and "responses" in text:
         return True
     return False
+
+
+def _build_native_file_input_probe_cache_key(
+    url: str, api_config: Optional[dict]
+) -> str:
+    cfg = api_config or {}
+    payload = {
+        "url": (url or "").rstrip("/"),
+        "auth_type": str(cfg.get("auth_type") or ""),
+        "headers": cfg.get("headers") or {},
+        "prefix_id": str(
+            cfg.get("_resolved_prefix_id") or cfg.get("prefix_id") or ""
+        ),
+        "azure": bool(cfg.get("azure")),
+        "force_mode": bool(cfg.get("force_mode")),
+    }
+    serialized = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+async def _probe_responses_support_for_native_file_inputs(
+    *,
+    url: str,
+    key: str,
+    api_config: Optional[dict],
+    user: Optional[UserModel] = None,
+    model_id: Optional[str] = None,
+) -> dict[str, Any]:
+    cache_key = _build_native_file_input_probe_cache_key(url, api_config)
+    cached_result = _NATIVE_FILE_INPUT_PROBE_CACHE.get(cache_key)
+    if cached_result and (time.time() - cached_result[0]) < _NATIVE_FILE_INPUT_PROBE_TTL_SECONDS:
+        return dict(cached_result[1])
+
+    cfg = api_config or {}
+    headers = _build_upstream_headers(url, key or "", cfg, user=user)
+    chosen_model = str(model_id or "gpt-4o-mini")
+    prefix_id = str(cfg.get("_resolved_prefix_id") or cfg.get("prefix_id") or "").strip()
+    if prefix_id:
+        prefix = f"{prefix_id}."
+        if chosen_model.startswith(prefix):
+            chosen_model = chosen_model[len(prefix) :]
+    if not chosen_model:
+        chosen_model = "gpt-4o-mini"
+
+    request_url = f"{(url or '').rstrip('/')}/responses"
+    payload = {
+        "model": chosen_model,
+        "input": [{"role": "user", "content": "ping"}],
+        "stream": False,
+    }
+
+    result: dict[str, Any]
+    try:
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=AIOHTTP_CLIENT_TIMEOUT_MODEL_LIST),
+            trust_env=True,
+        ) as session:
+            async with session.post(
+                request_url,
+                headers=headers,
+                data=json.dumps(payload, ensure_ascii=False, default=str),
+            ) as response:
+                body = await _safe_read_upstream_body(response)
+                body_text = _truncate_text(_stringify_upstream_body(body), 1200)
+
+                if response.status < 400:
+                    result = {
+                        "supported": True,
+                        "status": NATIVE_FILE_INPUT_STATUS_SUPPORTED,
+                        "reason": "responses_probe_succeeded",
+                        "message": "Responses endpoint probe succeeded for native file inputs.",
+                        "http_status": response.status,
+                        "body_preview": body_text,
+                    }
+                elif _looks_like_responses_endpoint_unsupported(response.status, body_text):
+                    result = {
+                        "supported": False,
+                        "status": NATIVE_FILE_INPUT_STATUS_PROTOCOL_NOT_ATTEMPTED,
+                        "reason": "responses_endpoint_unsupported",
+                        "message": (
+                            "The current connection does not support the OpenAI "
+                            "Responses endpoint required for native file inputs."
+                        ),
+                        "http_status": response.status,
+                        "body_preview": body_text,
+                    }
+                else:
+                    result = {
+                        "supported": None,
+                        "status": NATIVE_FILE_INPUT_STATUS_SUPPORTED,
+                        "reason": "responses_probe_inconclusive",
+                        "message": (
+                            "Responses endpoint probing was inconclusive; native "
+                            "file inputs will be attempted anyway."
+                        ),
+                        "http_status": response.status,
+                        "body_preview": body_text,
+                    }
+    except Exception as exc:
+        result = {
+            "supported": None,
+            "status": NATIVE_FILE_INPUT_STATUS_SUPPORTED,
+            "reason": "responses_probe_failed",
+            "message": (
+                "Responses endpoint probing failed; native file inputs will be "
+                "attempted anyway."
+            ),
+            "detail": _truncate_text(str(exc), 1200),
+        }
+
+    _NATIVE_FILE_INPUT_PROBE_CACHE[cache_key] = (time.time(), dict(result))
+    return result
 
 
 def _looks_like_chat_completions_endpoint_unsupported(status: int, body) -> bool:
@@ -2178,10 +2371,15 @@ async def generate_chat_completion(
 
     # Local-only flags (do not forward as-is).
     native_web_search = payload.pop("native_web_search", False) is True
+    native_file_inputs = payload.pop("native_file_inputs", False) is True
 
     # Responses API routing is strict: if enabled, we only call /responses and surface real errors.
     use_responses_api = _should_use_responses_api(
-        url, api_config, model_id, native_web_search=native_web_search
+        url,
+        api_config,
+        model_id,
+        native_web_search=native_web_search,
+        native_file_inputs=native_file_inputs,
     )
 
     request_url = (
@@ -2256,7 +2454,7 @@ async def generate_chat_completion(
     _store_info = payload_dict.get("store") if isinstance(payload_dict, dict) else None
     _include_info = payload_dict.get("include") if isinstance(payload_dict, dict) else None
     log.info(
-        "[UPSTREAM REQUEST] POST %s | model=%s | payload_keys=%s | messages=%s | tools=%s | size=%d | reasoning=%s | store=%s | include=%s",
+        "[UPSTREAM REQUEST] POST %s | model=%s | payload_keys=%s | messages=%s | tools=%s | size=%d | reasoning=%s | store=%s | include=%s | native_file_inputs=%s | responses=%s",
         request_url,
         payload_dict.get("model", "?") if isinstance(payload_dict, dict) else "?",
         _diag_keys,
@@ -2266,6 +2464,8 @@ async def generate_chat_completion(
         _reasoning_info or "none",
         _store_info,
         _include_info,
+        native_file_inputs,
+        use_responses_api,
     )
     if log.isEnabledFor(logging.DEBUG):
         _diag_headers = {
@@ -2440,6 +2640,12 @@ async def generate_chat_completion(
                     message = _format_responses_upstream_error(
                         request_url=request_url, status=r.status, body=response
                     )
+                    if native_file_inputs:
+                        message = (
+                            "Native file inputs request failed. "
+                            "The upstream rejected the OpenAI Files/Responses "
+                            f"native-file flow.\n{message}"
+                        )
 
                     if client_stream:
                         streaming = True

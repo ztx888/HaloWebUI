@@ -7,6 +7,7 @@ from typing import Optional
 
 from open_webui.retrieval.vector.main import VectorItem, SearchResult, GetResult
 from open_webui.config import (
+    DATABASE_URL,
     CHROMA_DATA_PATH,
     CHROMA_HTTP_HOST,
     CHROMA_HTTP_PORT,
@@ -53,11 +54,40 @@ class ChromaClient:
                 tenant=CHROMA_TENANT,
                 database=CHROMA_DATABASE,
             )
+        if str(DATABASE_URL).startswith("postgres"):
+            log.info(
+                "Primary database is PostgreSQL, but the active vector backend remains Chroma."
+            )
+
+    def _is_missing_collection_error(self, exc: Exception) -> bool:
+        name = type(exc).__name__.lower()
+        text = str(exc).lower()
+        if "notfound" in name or "invalidcollection" in name:
+            return True
+        return "collection" in text and "not found" in text
+
+    def _is_legacy_collection_config_error(self, exc: Exception) -> bool:
+        if isinstance(exc, KeyError) and exc.args == ("_type",):
+            return True
+        text = str(exc).lower()
+        return "configuration" in text and "_type" in text
 
     def has_collection(self, collection_name: str) -> bool:
-        # Check if the collection exists based on the collection name.
-        collection_names = self.client.list_collections()
-        return collection_name in collection_names
+        # Probe a single collection directly so unrelated legacy collections
+        # with bad config payloads do not break the whole request.
+        try:
+            self.client.get_collection(name=collection_name)
+            return True
+        except Exception as exc:
+            if self._is_missing_collection_error(exc):
+                return False
+            if self._is_legacy_collection_config_error(exc):
+                log.warning(
+                    "Chroma collection %s has a legacy or invalid configuration payload; treating it as missing for compatibility.",
+                    collection_name,
+                )
+                return False
+            raise
 
     def delete_collection(self, collection_name: str):
         # Delete the collection based on the collection name.

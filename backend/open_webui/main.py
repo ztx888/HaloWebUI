@@ -440,6 +440,7 @@ from open_webui.utils.chat import (
     chat_action as chat_action_handler,
 )
 from open_webui.utils.middleware import (
+    build_native_file_input_retry_notification,
     process_chat_payload,
     process_chat_response,
     should_retry_native_file_inputs_with_rag,
@@ -1499,9 +1500,8 @@ async def chat_completion(
                         "type": "notification",
                         "data": {
                             "type": "info",
-                            "content": (
-                                "Native file inputs are unavailable for this request. "
-                                "Retrying with full document context."
+                            "content": build_native_file_input_retry_notification(
+                                retry_metadata, e
                             ),
                         },
                     }

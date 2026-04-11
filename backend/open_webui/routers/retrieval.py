@@ -1192,6 +1192,7 @@ class ProcessFileForm(BaseModel):
     overwrite: bool = False
     processing_mode: Optional[str] = None
     document_provider: Optional[str] = None
+    allow_provider_local_fallback: bool = True
 
 
 def _delete_collection_if_exists(collection_name: Optional[str]) -> None:
@@ -1265,6 +1266,7 @@ def _prepare_documents_for_processing(
     requested_provider: str,
     content: Optional[str] = None,
     allow_cached_collection_docs: bool = False,
+    allow_provider_local_fallback: bool = True,
 ) -> tuple[
     list[Document],
     str,
@@ -1345,7 +1347,7 @@ def _prepare_documents_for_processing(
             request,
             file,
             provider=requested_provider,
-            allow_local_fallback=True,
+            allow_local_fallback=allow_provider_local_fallback,
         )
         docs = extraction.docs
         return (
@@ -1432,6 +1434,7 @@ def process_file(
                 processing_mode=processing_mode,
                 requested_provider=requested_provider,
                 content=form_data.content,
+                allow_provider_local_fallback=form_data.allow_provider_local_fallback,
             )
         elif form_data.collection_name:
             (
@@ -1450,6 +1453,7 @@ def process_file(
                 processing_mode=processing_mode,
                 requested_provider=requested_provider,
                 allow_cached_collection_docs=True,
+                allow_provider_local_fallback=form_data.allow_provider_local_fallback,
             )
         else:
             if processing_mode == FILE_PROCESSING_MODE_NATIVE_FILE:
@@ -1499,6 +1503,7 @@ def process_file(
                 file,
                 processing_mode=processing_mode,
                 requested_provider=requested_provider,
+                allow_provider_local_fallback=form_data.allow_provider_local_fallback,
             )
 
         text_content = text_content or ""
