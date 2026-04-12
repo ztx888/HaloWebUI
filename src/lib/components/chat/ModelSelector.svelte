@@ -45,23 +45,24 @@
 		</div>
 	{/if}
 
-	{#each selectedModels as selectedModel, selectedModelIdx}
-		<div class="flex flex-wrap w-full max-w-fit items-center gap-1.5">
-			<div class="overflow-hidden">
-				<div class="max-w-full">
-					<Selector
-						id={`${selectedModelIdx}`}
-						placeholder={$i18n.t('Select a model')}
-						items={selectorItems}
-						showSetDefaultAction={showSetDefault && selectedModelIdx === 0}
-						showTemporaryChatControl={temporaryChatAccess.allowed && !temporaryChatAccess.enforced}
-						bind:value={selectedModel}
-					/>
+	{#if selectedModels.length <= 1}
+		<!-- 单模型：保持原有的完整下拉选择器样式 -->
+		{#each selectedModels as selectedModel, selectedModelIdx}
+			<div class="flex flex-wrap w-full max-w-fit items-center gap-1.5">
+				<div class="overflow-hidden">
+					<div class="max-w-full">
+						<Selector
+							id={`${selectedModelIdx}`}
+							placeholder={$i18n.t('Select a model')}
+							items={selectorItems}
+							showSetDefaultAction={showSetDefault && selectedModelIdx === 0}
+							showTemporaryChatControl={temporaryChatAccess.allowed && !temporaryChatAccess.enforced}
+							bind:value={selectedModel}
+						/>
+					</div>
 				</div>
-			</div>
 
-			{#if $user?.role === 'admin' || ($user?.permissions?.chat?.multiple_models ?? true)}
-				{#if selectedModelIdx === 0}
+				{#if $user?.role === 'admin' || ($user?.permissions?.chat?.multiple_models ?? true)}
 					<div class="shrink-0">
 						<Tooltip content={$i18n.t('Add Model')}>
 							<button
@@ -95,19 +96,39 @@
 							</button>
 						</Tooltip>
 					</div>
-				{:else}
-					<div class="shrink-0">
+				{/if}
+			</div>
+		{/each}
+	{:else}
+		<!-- 多模型：紧凑水平 chips 流式布局 -->
+		<div class="flex flex-wrap items-center gap-1.5 max-w-full">
+			{#each selectedModels as selectedModel, selectedModelIdx}
+				{@const modelItem = selectorItems.find((item) => item.value === selectedModel)}
+				<div class="flex items-center gap-0.5 group/chip">
+					<!-- 模型 Selector 下拉（点击弹出更换模型） -->
+					<div class="overflow-hidden max-w-[200px]">
+						<Selector
+							id={`${selectedModelIdx}`}
+							placeholder={$i18n.t('Select a model')}
+							items={selectorItems}
+							showSetDefaultAction={showSetDefault && selectedModelIdx === 0}
+							showTemporaryChatControl={selectedModelIdx === 0 && temporaryChatAccess.allowed && !temporaryChatAccess.enforced}
+							triggerClassName="text-sm"
+							bind:value={selectedModel}
+						/>
+					</div>
+					<!-- 删除按钮（第一个模型不显示删除，只在 hover 时显示） -->
+					{#if selectedModelIdx > 0}
 						<Tooltip content={$i18n.t('Remove Model')}>
 							<button
 								class="inline-flex items-center justify-center
-									size-7 rounded-lg
-									text-gray-500 dark:text-gray-400
+									size-5 rounded-md
+									text-gray-400 dark:text-gray-500
 									bg-transparent
-									border border-transparent
+									opacity-0 group-hover/chip:opacity-100
 									hover:bg-red-50/80 dark:hover:bg-red-900/20
-									hover:border-red-200/50 dark:hover:border-red-800/30
-									hover:text-red-600 dark:hover:text-red-400
-									active:scale-[0.92]
+									hover:text-red-500 dark:hover:text-red-400
+									active:scale-[0.88]
 									transition-all duration-150
 									disabled:opacity-40 disabled:pointer-events-none"
 								{disabled}
@@ -121,18 +142,52 @@
 									xmlns="http://www.w3.org/2000/svg"
 									fill="none"
 									viewBox="0 0 24 24"
-									stroke-width="2"
+									stroke-width="2.5"
 									stroke="currentColor"
-									class="size-3.5"
+									class="size-3"
 								>
-									<path stroke-linecap="round" stroke-linejoin="round" d="M19.5 12h-15" />
+									<path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
 								</svg>
 							</button>
 						</Tooltip>
-					</div>
-				{/if}
-			{/if}
+					{/if}
+				</div>
+			{/each}
 
+			<!-- 添加模型按钮 - 与 chips 同行 -->
+			{#if $user?.role === 'admin' || ($user?.permissions?.chat?.multiple_models ?? true)}
+				<Tooltip content={$i18n.t('Add Model')}>
+					<button
+						class="inline-flex items-center justify-center
+							size-6 rounded-lg
+							text-gray-400 dark:text-gray-500
+							bg-transparent
+							border border-dashed border-gray-300/60 dark:border-gray-600/40
+							hover:bg-gray-100/80 dark:hover:bg-gray-800/60
+							hover:border-gray-400/60 dark:hover:border-gray-500/50
+							hover:text-gray-600 dark:hover:text-gray-300
+							active:scale-[0.92]
+							transition-all duration-150
+							disabled:opacity-40 disabled:pointer-events-none"
+						{disabled}
+						on:click={() => {
+							selectedModels = [...selectedModels, ''];
+						}}
+						aria-label="Add Model"
+					>
+						<svg
+							xmlns="http://www.w3.org/2000/svg"
+							fill="none"
+							viewBox="0 0 24 24"
+							stroke-width="2"
+							stroke="currentColor"
+							class="size-3"
+						>
+							<path stroke-linecap="round" stroke-linejoin="round" d="M12 6v12m6-6H6" />
+						</svg>
+					</button>
+				</Tooltip>
+			{/if}
 		</div>
-	{/each}
+	{/if}
 </div>
