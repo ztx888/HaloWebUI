@@ -1,6 +1,8 @@
 <script lang="ts">
+	import Plus from '$lib/components/icons/Plus.svelte';
 	import Switch from '$lib/components/common/Switch.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
+	import XMark from '$lib/components/icons/XMark.svelte';
 	import { getContext, createEventDispatcher } from 'svelte';
 	import type { Writable } from 'svelte/store';
 
@@ -51,6 +53,7 @@
 	let customFieldName = '';
 	let customFieldValue = '';
 	let customParamEntries: [string, any][] = [];
+	let customParamsExpanded = false;
 
 	$: if (params) {
 		dispatch('change', params);
@@ -126,7 +129,7 @@
 		if (!params) return;
 		params = {
 			...params,
-			custom_params: nextCustomParams
+			custom_params: Object.keys(nextCustomParams).length > 0 ? nextCustomParams : null
 		};
 	};
 
@@ -192,7 +195,22 @@
 		setCustomParams(nextCustomParams);
 	};
 
+	const clearCustomParams = () => {
+		if (!params) return;
+		customFieldName = '';
+		customFieldValue = '';
+		params = {
+			...params,
+			custom_params: null
+		};
+	};
+
+	const toggleCustomParamsPanel = () => {
+		customParamsExpanded = !customParamsExpanded;
+	};
+
 	$: customParamEntries = Object.entries(getCustomParams());
+	$: hasCustomParams = customParamEntries.length > 0;
 </script>
 
 <div class="space-y-1.5 text-xs pb-safe-bottom">
@@ -1459,51 +1477,47 @@
 				placement="top-start"
 				className="inline-tooltip"
 			>
-				<div class="flex w-full justify-between">
+				<button
+					class="flex w-full items-center justify-between gap-3 text-left text-xs cursor-pointer transition-colors duration-200"
+					type="button"
+					on:click={toggleCustomParamsPanel}
+				>
 					<div class="self-center text-xs font-medium">自定义请求参数</div>
-					<button
-						class="text-xs cursor-pointer transition-colors duration-200 shrink-0"
-						type="button"
-						on:click={() => {
-							if ((params?.custom_params ?? null) === null) {
-								setCustomParams({});
-								return;
-							}
-
-							customFieldName = '';
-							customFieldValue = '';
-							params = { ...params, custom_params: null };
-						}}
+					<div
+						class="shrink-0 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
 					>
-						{#if (params?.custom_params ?? null) === null}
-							<span
-								class="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
-							>
-								{$i18n.t('Default')}
-							</span>
-						{:else}
-							<span
-								class="text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300"
-							>
-								{$i18n.t('Custom')}
-							</span>
-						{/if}
-					</button>
-				</div>
+						添加
+					</div>
+				</button>
 			</Tooltip>
 
-			{#if (params?.custom_params ?? null) !== null}
-				<div class="mt-1.5 space-y-2">
-					<div class="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.3fr)_auto] gap-2">
+			{#if customParamsExpanded}
+				<div class="mt-2 rounded-xl border border-dashed border-gray-200/80 dark:border-gray-700/60 bg-gray-50/60 dark:bg-gray-900/25 px-2.5 py-2.5 space-y-2">
+					<div class="flex items-center justify-between gap-3">
+						<div class="text-[11px] leading-5 text-gray-500 dark:text-gray-400">
+							会作为补充字段附加到上游请求，不覆盖系统已有参数。
+						</div>
+						{#if hasCustomParams}
+							<button
+								class="shrink-0 text-[11px] text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300 transition-colors duration-200"
+								type="button"
+								on:click={clearCustomParams}
+							>
+								清空
+							</button>
+						{/if}
+					</div>
+
+					<div class="grid grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_auto] gap-1.5">
 						<input
-							class="w-full rounded-lg py-2 px-3 text-sm dark:text-gray-300 bg-gray-50 dark:bg-gray-800/50 border border-gray-200/60 dark:border-gray-700/40 outline-hidden focus:border-blue-300/50 dark:focus:border-blue-500/30 transition-colors duration-200 placeholder:text-gray-400 dark:placeholder:text-gray-500"
+							class="w-full rounded-lg py-1.5 px-2.5 text-xs dark:text-gray-300 bg-white/80 dark:bg-gray-800/70 border border-gray-200/70 dark:border-gray-700/50 outline-hidden focus:border-blue-300/50 dark:focus:border-blue-500/30 transition-colors duration-200 placeholder:text-gray-400 dark:placeholder:text-gray-500"
 							type="text"
 							placeholder="参数名，如 top_k"
 							bind:value={customFieldName}
 							autocomplete="off"
 						/>
 						<input
-							class="w-full rounded-lg py-2 px-3 text-sm dark:text-gray-300 bg-gray-50 dark:bg-gray-800/50 border border-gray-200/60 dark:border-gray-700/40 outline-hidden focus:border-blue-300/50 dark:focus:border-blue-500/30 transition-colors duration-200 placeholder:text-gray-400 dark:placeholder:text-gray-500"
+							class="w-full rounded-lg py-1.5 px-2.5 text-xs dark:text-gray-300 bg-white/80 dark:bg-gray-800/70 border border-gray-200/70 dark:border-gray-700/50 outline-hidden focus:border-blue-300/50 dark:focus:border-blue-500/30 transition-colors duration-200 placeholder:text-gray-400 dark:placeholder:text-gray-500"
 							type="text"
 							placeholder='参数值，支持 JSON / true / 123 / null'
 							bind:value={customFieldValue}
@@ -1516,35 +1530,37 @@
 							}}
 						/>
 						<button
-							class="rounded-lg px-3 text-xs font-medium border border-gray-200/70 dark:border-gray-700/50 bg-white/80 dark:bg-gray-800/60 hover:border-blue-300/60 dark:hover:border-blue-500/40 transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-50"
+							class="inline-flex size-8 items-center justify-center rounded-lg border border-gray-200/70 dark:border-gray-700/50 bg-white/90 dark:bg-gray-800/70 text-gray-500 hover:text-blue-600 hover:border-blue-300/60 dark:text-gray-400 dark:hover:text-blue-300 dark:hover:border-blue-500/40 transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-50"
 							type="button"
 							on:click={addCustomParam}
 							disabled={!customFieldName.trim()}
+							title="添加参数"
 						>
-							添加
+							<Plus className="size-3.5" strokeWidth="2.5" />
 						</button>
 					</div>
 
-					{#if customParamEntries.length > 0}
-						<div class="space-y-2">
+					{#if hasCustomParams}
+						<div class="space-y-1.5">
 							{#each customParamEntries as [key, value]}
 								<div
-									class="flex items-start justify-between gap-3 rounded-lg border border-gray-200/60 dark:border-gray-700/40 bg-white/70 dark:bg-gray-900/30 px-3 py-2"
+									class="flex items-start justify-between gap-2 rounded-lg border border-gray-200/60 dark:border-gray-700/40 bg-white/80 dark:bg-gray-900/35 px-2.5 py-2"
 								>
 									<div class="min-w-0 flex-1">
-										<div class="text-xs font-medium text-gray-700 dark:text-gray-200 break-all">
+										<div class="inline-flex max-w-full items-center rounded-md bg-gray-100/90 dark:bg-gray-800/80 px-1.5 py-0.5 text-[11px] font-medium text-gray-700 dark:text-gray-200 break-all">
 											{key}
 										</div>
-										<div class="mt-1 text-[11px] text-gray-500 dark:text-gray-400 break-all">
+										<div class="mt-1 text-[11px] leading-5 text-gray-500 dark:text-gray-400 break-all">
 											{formatCustomParamValue(value)}
 										</div>
 									</div>
 									<button
-										class="text-[11px] text-gray-400 hover:text-red-500 dark:text-gray-500 dark:hover:text-red-400 transition-colors duration-200 shrink-0"
+										class="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-gray-400 hover:bg-gray-100/80 hover:text-red-500 dark:text-gray-500 dark:hover:bg-gray-800/70 dark:hover:text-red-400 transition-colors duration-200"
 										type="button"
 										on:click={() => removeCustomParam(key)}
+										title={$i18n.t('Remove')}
 									>
-										{$i18n.t('Remove')}
+										<XMark className="size-3" strokeWidth="2.25" />
 									</button>
 								</div>
 							{/each}

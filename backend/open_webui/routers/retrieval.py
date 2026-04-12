@@ -470,6 +470,9 @@ async def get_rag_config(request: Request, user=Depends(get_admin_user)):
         "EXTERNAL_DOCUMENT_LOADER_URL": getattr(
             request.app.state.config, "EXTERNAL_DOCUMENT_LOADER_URL", ""
         ),
+        "EXTERNAL_DOCUMENT_LOADER_URL_IS_FULL_PATH": getattr(
+            request.app.state.config, "EXTERNAL_DOCUMENT_LOADER_URL_IS_FULL_PATH", False
+        ),
         "EXTERNAL_DOCUMENT_LOADER_API_KEY": getattr(
             request.app.state.config, "EXTERNAL_DOCUMENT_LOADER_API_KEY", ""
         ),
@@ -666,6 +669,7 @@ class ConfigForm(BaseModel):
     DATALAB_MARKER_USE_LLM: Optional[bool] = None
     DATALAB_MARKER_OUTPUT_FORMAT: Optional[str] = None
     EXTERNAL_DOCUMENT_LOADER_URL: Optional[str] = None
+    EXTERNAL_DOCUMENT_LOADER_URL_IS_FULL_PATH: Optional[bool] = None
     EXTERNAL_DOCUMENT_LOADER_API_KEY: Optional[str] = None
     PDF_EXTRACT_IMAGES: Optional[bool] = None
     PDF_LOADING_MODE: Optional[str] = None
@@ -869,6 +873,13 @@ async def update_rag_config(
         form_data.EXTERNAL_DOCUMENT_LOADER_URL
         if form_data.EXTERNAL_DOCUMENT_LOADER_URL is not None
         else getattr(request.app.state.config, "EXTERNAL_DOCUMENT_LOADER_URL", "")
+    )
+    request.app.state.config.EXTERNAL_DOCUMENT_LOADER_URL_IS_FULL_PATH = (
+        form_data.EXTERNAL_DOCUMENT_LOADER_URL_IS_FULL_PATH
+        if form_data.EXTERNAL_DOCUMENT_LOADER_URL_IS_FULL_PATH is not None
+        else getattr(
+            request.app.state.config, "EXTERNAL_DOCUMENT_LOADER_URL_IS_FULL_PATH", False
+        )
     )
     request.app.state.config.EXTERNAL_DOCUMENT_LOADER_API_KEY = (
         form_data.EXTERNAL_DOCUMENT_LOADER_API_KEY

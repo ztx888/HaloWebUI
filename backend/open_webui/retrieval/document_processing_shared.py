@@ -63,6 +63,7 @@ DEFAULT_DOCUMENT_PROVIDER_CONFIGS = {
     },
     DOCUMENT_PROVIDER_PADDLEOCR: {
         "server_url": "",
+        "api_key": "",
         "poll_interval": 2,
         "timeout": 120,
     },

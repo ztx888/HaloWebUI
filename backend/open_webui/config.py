@@ -2464,6 +2464,13 @@ EXTERNAL_DOCUMENT_LOADER_URL = PersistentConfig(
     os.environ.get("EXTERNAL_DOCUMENT_LOADER_URL", ""),
 )
 
+EXTERNAL_DOCUMENT_LOADER_URL_IS_FULL_PATH = PersistentConfig(
+    "EXTERNAL_DOCUMENT_LOADER_URL_IS_FULL_PATH",
+    "rag.external_document_loader_url_is_full_path",
+    os.environ.get("EXTERNAL_DOCUMENT_LOADER_URL_IS_FULL_PATH", "false").lower()
+    == "true",
+)
+
 EXTERNAL_DOCUMENT_LOADER_API_KEY = PersistentConfig(
     "EXTERNAL_DOCUMENT_LOADER_API_KEY",
     "rag.external_document_loader_api_key",

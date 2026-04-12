@@ -294,6 +294,9 @@ class Loader:
             loader = ExternalDocumentLoader(
                 file_path=file_path,
                 url=self.kwargs.get("EXTERNAL_DOCUMENT_LOADER_URL"),
+                url_is_full_path=self.kwargs.get(
+                    "EXTERNAL_DOCUMENT_LOADER_URL_IS_FULL_PATH", False
+                ),
                 api_key=self.kwargs.get("EXTERNAL_DOCUMENT_LOADER_API_KEY"),
                 mime_type=file_content_type,
                 user=self.user,

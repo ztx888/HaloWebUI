@@ -187,7 +187,8 @@
 			api_key: ''
 		},
 		paddleocr: {
-			server_url: ''
+			server_url: '',
+			api_key: ''
 		},
 		mistral: {
 			api_key: ''
@@ -297,17 +298,17 @@
 		},
 		paddleocr: {
 			label: 'PaddleOCR',
-			description: '对接自建或第三方 PaddleOCR 服务。',
-			requirement: '需要可访问的 PaddleOCR 服务地址。',
-			limits: '解析能力和并发取决于具体服务实现。',
+			description: '对接第三方或自建 PaddleOCR OCR 接口。',
+			requirement: '需要完整 OCR 接口地址；第三方服务通常还需要访问令牌。',
+			limits: '不同服务商的模型能力、配额和响应字段可能不同。',
 			officialUrl: 'https://aistudio.baidu.com/paddleocr/',
 			officialLabel: '查看 PaddleOCR 官网'
 		},
 		external: {
 			label: '外部文档加载器',
 			description: '把文件转发到自定义文档解析 API，再回收结构化内容。',
-			requirement: '需要可访问的外部加载器 URL 和 API 密钥。',
-			limits: '返回格式需兼容 OpenWebUI 外部文档加载器协议。',
+			requirement: '需要兼容文档解析协议的完整接口 URL 和 API 密钥。',
+			limits: '该接口需要接收文件二进制并返回 Document JSON，不适用于聊天补全接口。',
 			badge: '扩展'
 		}
 	};
@@ -333,6 +334,29 @@
 
 	const formatJsonSetting = (value: unknown) =>
 		typeof value === 'object' && value !== null ? JSON.stringify(value, null, 2) : (value ?? '');
+
+	const buildLegacyExternalProcessUrl = (url: string) => {
+		const normalized = url.trim();
+		if (!normalized) return '';
+
+		const match = normalized.match(/^([^?#]*)([?#].*)?$/);
+		const base = match?.[1] ?? normalized;
+		const suffix = match?.[2] ?? '';
+		const sanitizedBase = base.replace(/\/+$/, '');
+
+		if (sanitizedBase.endsWith('/process')) {
+			return `${sanitizedBase}${suffix}`;
+		}
+
+		return `${sanitizedBase}/process${suffix}`;
+	};
+
+	const normalizeExternalLoaderUrl = (url: unknown, isFullPath: boolean) => {
+		const normalized = String(url ?? '').trim();
+		if (!normalized) return '';
+		if (isFullPath) return normalized;
+		return buildLegacyExternalProcessUrl(normalized);
+	};
 
 	const deriveExtractionEngine = (value: any): ContentEngineId => {
 		const provider = String(value?.DOCUMENT_PROVIDER ?? '').trim();
@@ -382,6 +406,8 @@
 		const legacyMineruConfig = mergedConfigs?.mineru ?? {};
 		const legacyMistralConfig = mergedConfigs?.mistral ?? {};
 		const legacyAzureConfig = mergedConfigs?.azure_document_intelligence ?? {};
+		const externalDocumentLoaderUrlIsFullPath =
+			value?.EXTERNAL_DOCUMENT_LOADER_URL_IS_FULL_PATH ?? false;
 		const normalizedTextSplitter = value?.TEXT_SPLITTER === 'markdown' ? '' : (value?.TEXT_SPLITTER ?? '');
 		const enableMarkdownHeaderTextSplitter =
 			value?.ENABLE_MARKDOWN_HEADER_TEXT_SPLITTER ??
@@ -415,7 +441,11 @@
 			DATALAB_MARKER_FORMAT_LINES: value?.DATALAB_MARKER_FORMAT_LINES ?? false,
 			DATALAB_MARKER_USE_LLM: value?.DATALAB_MARKER_USE_LLM ?? false,
 			DATALAB_MARKER_OUTPUT_FORMAT: value?.DATALAB_MARKER_OUTPUT_FORMAT ?? 'markdown',
-			EXTERNAL_DOCUMENT_LOADER_URL: value?.EXTERNAL_DOCUMENT_LOADER_URL ?? '',
+			EXTERNAL_DOCUMENT_LOADER_URL: normalizeExternalLoaderUrl(
+				value?.EXTERNAL_DOCUMENT_LOADER_URL,
+				externalDocumentLoaderUrlIsFullPath
+			),
+			EXTERNAL_DOCUMENT_LOADER_URL_IS_FULL_PATH: externalDocumentLoaderUrlIsFullPath,
 			EXTERNAL_DOCUMENT_LOADER_API_KEY: value?.EXTERNAL_DOCUMENT_LOADER_API_KEY ?? '',
 			DOCLING_API_KEY: value?.DOCLING_API_KEY ?? '',
 			DOCLING_PARAMS: formatJsonSetting(value?.DOCLING_PARAMS),
@@ -484,6 +514,7 @@
 		DATALAB_MARKER_USE_LLM: false,
 		DATALAB_MARKER_OUTPUT_FORMAT: 'markdown',
 		EXTERNAL_DOCUMENT_LOADER_URL: '',
+		EXTERNAL_DOCUMENT_LOADER_URL_IS_FULL_PATH: false,
 		EXTERNAL_DOCUMENT_LOADER_API_KEY: '',
 		PDF_EXTRACT_IMAGES: false,
 		PDF_LOADING_MODE: '',
@@ -545,6 +576,8 @@
 				DATALAB_MARKER_USE_LLM: RAGConfig?.DATALAB_MARKER_USE_LLM,
 				DATALAB_MARKER_OUTPUT_FORMAT: RAGConfig?.DATALAB_MARKER_OUTPUT_FORMAT,
 				EXTERNAL_DOCUMENT_LOADER_URL: RAGConfig?.EXTERNAL_DOCUMENT_LOADER_URL,
+				EXTERNAL_DOCUMENT_LOADER_URL_IS_FULL_PATH:
+					RAGConfig?.EXTERNAL_DOCUMENT_LOADER_URL_IS_FULL_PATH,
 				EXTERNAL_DOCUMENT_LOADER_API_KEY: RAGConfig?.EXTERNAL_DOCUMENT_LOADER_API_KEY,
 				PDF_EXTRACT_IMAGES: RAGConfig?.PDF_EXTRACT_IMAGES,
 				PDF_LOADING_MODE: RAGConfig?.PDF_LOADING_MODE,
@@ -723,48 +756,32 @@
 			return false;
 		}
 		if (embeddingEngine === '' && embeddingModel.split('/').length - 1 > 1) {
-			toast.error(
-				$i18n.t(
-					'Model filesystem path detected. Model shortname is required for update, cannot continue.'
-				)
-			);
+			toast.error('检测到模型文件系统路径。更新时必须填写模型短名称，无法继续。');
 			return false;
 		}
 		if (embeddingEngine === 'ollama' && embeddingModel === '') {
-			toast.error(
-				$i18n.t(
-					'Model filesystem path detected. Model shortname is required for update, cannot continue.'
-				)
-			);
+			toast.error('请填写 Ollama 嵌入模型名称。');
 			return false;
 		}
 
 		if (embeddingEngine === 'openai' && embeddingModel === '') {
-			toast.error(
-				$i18n.t(
-					'Model filesystem path detected. Model shortname is required for update, cannot continue.'
-				)
-			);
+			toast.error('请填写 OpenAI 嵌入模型名称。');
 			return false;
 		}
 		if (embeddingEngine === 'azure_openai' && embeddingModel === '') {
-			toast.error(
-				$i18n.t(
-					'Model filesystem path detected. Model shortname is required for update, cannot continue.'
-				)
-			);
+			toast.error('请填写 Azure OpenAI 嵌入模型名称。');
 			return false;
 		}
 
 		if (embeddingEngine === 'openai' && (OpenAIKey === '' || OpenAIUrl === '')) {
-			toast.error($i18n.t('OpenAI URL/Key required.'));
+			toast.error('请填写 OpenAI API 基础 URL 和 API 密钥。');
 			return false;
 		}
 		if (
 			embeddingEngine === 'azure_openai' &&
 			(AzureOpenAIKey === '' || AzureOpenAIUrl === '' || AzureOpenAIVersion === '')
 		) {
-			toast.error('Azure OpenAI URL/Key/Version required.');
+			toast.error('请填写 Azure OpenAI API 基础 URL、API 密钥和 API 版本。');
 			return false;
 		}
 
@@ -796,7 +813,7 @@
 		updateEmbeddingModelLoading = false;
 
 		if (res?.status === true) {
-			toast.success($i18n.t('Embedding model set to "{{embedding_model}}"', res), {
+			toast.success(`嵌入模型已更新为「${res.embedding_model}」`, {
 				duration: 1000 * 10
 			});
 			return true;
@@ -811,7 +828,7 @@
 			return false;
 		}
 		if (['jina', 'external'].includes(rerankingEngine) && rerankingModel !== '' && rerankingApiUrl === '') {
-			toast.error($i18n.t('Reranking API URL required.'));
+			toast.error('请填写重排序服务 API 基础 URL。');
 			return false;
 		}
 		updateRerankingModelLoading = true;
@@ -831,11 +848,11 @@
 
 		if (res?.status === true) {
 			if (rerankingModel === '') {
-				toast.success($i18n.t('Reranking model disabled', res), {
+				toast.success('已关闭重排序模型。', {
 					duration: 1000 * 10
 				});
 			} else {
-				toast.success($i18n.t('Reranking model set to "{{reranking_model}}"', res), {
+				toast.success(`重排序模型已更新为「${res.reranking_model}」`, {
 					duration: 1000 * 10
 				});
 			}
@@ -864,12 +881,12 @@
 			selectedExtractionEngine === 'doc2x' &&
 			String(selectedProviderConfig.api_key ?? '').trim() === ''
 		) {
-			toast.error('Doc2x API Key required.');
+			toast.error('请填写 Doc2x API 密钥。');
 			return;
 		}
 
 		if (selectedExtractionEngine === 'paddleocr' && String(selectedProviderConfig.server_url ?? '').trim() === '') {
-			toast.error('PaddleOCR Server URL required.');
+			toast.error('请填写 PaddleOCR 服务地址。');
 			return;
 		}
 
@@ -878,31 +895,34 @@
 			RAGConfig.MINERU_API_MODE === 'cloud' &&
 			RAGConfig.MINERU_API_KEY === ''
 		) {
-			toast.error('MinerU API Key required for cloud mode.');
+			toast.error('云端 API 模式下必须填写 MinerU API 密钥。');
 			return;
 		}
 
-		if (selectedExtractionEngine === 'external' && RAGConfig.EXTERNAL_DOCUMENT_LOADER_URL === '') {
-			toast.error('External Document Loader URL required.');
+		if (
+			selectedExtractionEngine === 'external' &&
+			String(RAGConfig.EXTERNAL_DOCUMENT_LOADER_URL ?? '').trim() === ''
+		) {
+			toast.error('请填写外部文档解析接口完整 URL。');
 			return;
 		}
 		if (
 			selectedExtractionEngine === 'external' &&
 			String(RAGConfig.EXTERNAL_DOCUMENT_LOADER_API_KEY ?? '').trim() === ''
 		) {
-			toast.error('External Document Loader API Key required.');
+			toast.error('请填写外部文档解析接口 API 密钥。');
 			return;
 		}
 		if (selectedExtractionEngine === 'tika' && RAGConfig.TIKA_SERVER_URL === '') {
-			toast.error($i18n.t('Tika Server URL required.'));
+			toast.error('请填写 Tika 服务地址。');
 			return;
 		}
 		if (selectedExtractionEngine === 'docling' && RAGConfig.DOCLING_SERVER_URL === '') {
-			toast.error($i18n.t('Docling Server URL required.'));
+			toast.error('请填写 Docling 服务地址。');
 			return;
 		}
 		if (selectedExtractionEngine === 'datalab_marker' && RAGConfig.DATALAB_MARKER_API_KEY === '') {
-			toast.error('Datalab Marker API Key required.');
+			toast.error('请填写 Datalab Marker API 密钥。');
 			return;
 		}
 		if (
@@ -913,7 +933,7 @@
 			try {
 				JSON.parse(RAGConfig.DATALAB_MARKER_ADDITIONAL_CONFIG);
 			} catch (e) {
-				toast.error('Invalid JSON format in Datalab Marker Additional Config.');
+				toast.error('Datalab Marker 附加配置 JSON 格式不正确。');
 				return;
 			}
 		}
@@ -923,18 +943,18 @@
 			(RAGConfig.DOCUMENT_INTELLIGENCE_ENDPOINT === '' ||
 				RAGConfig.DOCUMENT_INTELLIGENCE_KEY === '')
 		) {
-			toast.error($i18n.t('Document Intelligence endpoint and key required.'));
+			toast.error('请填写 Azure 文档智能的服务端点和 API 密钥。');
 			return;
 		}
 		if (selectedExtractionEngine === 'mistral_ocr' && RAGConfig.MISTRAL_OCR_API_KEY === '') {
-			toast.error($i18n.t('Mistral OCR API Key required.'));
+			toast.error('请填写 Mistral OCR API 密钥。');
 			return;
 		}
 		if (
 			selectedExtractionEngine === 'mineru' &&
 			String(RAGConfig.MINERU_API_URL ?? '').trim() === ''
 		) {
-			toast.error('MinerU API URL required.');
+			toast.error('请填写 MinerU API 地址。');
 			return;
 		}
 
@@ -942,7 +962,7 @@
 			try {
 				parseJsonConfig(RAGConfig.DOCLING_PARAMS);
 			} catch (e) {
-				toast.error('Invalid JSON format in Docling Parameters.');
+				toast.error('Docling 高级参数 JSON 格式不正确。');
 				return;
 			}
 		}
@@ -950,7 +970,7 @@
 			try {
 				parseJsonConfig(RAGConfig.MINERU_PARAMS);
 			} catch (e) {
-				toast.error('Invalid JSON format in MinerU Parameters.');
+				toast.error('MinerU 高级参数 JSON 格式不正确。');
 				return;
 			}
 		}
@@ -977,6 +997,9 @@
 			.split(',')
 			.map((ext) => ext.trim().replace(/^\./, '').toLowerCase())
 			.filter((ext) => ext !== '');
+		const normalizedExternalLoaderUrl = String(RAGConfig.EXTERNAL_DOCUMENT_LOADER_URL ?? '').trim();
+		RAGConfig.EXTERNAL_DOCUMENT_LOADER_URL = normalizedExternalLoaderUrl;
+		RAGConfig.EXTERNAL_DOCUMENT_LOADER_URL_IS_FULL_PATH = normalizedExternalLoaderUrl !== '';
 
 		try {
 			await updateRAGConfig(localStorage.token, {
@@ -1295,9 +1318,9 @@
 									<div class="grid grid-cols-1 gap-3 md:grid-cols-2">
 										<div>
 											<div class="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">外部文档加载器 URL</div>
-											<input class="glass-input w-full px-3 py-2 text-sm dark:text-gray-300" bind:value={RAGConfig.EXTERNAL_DOCUMENT_LOADER_URL} placeholder="https://api.example.com/v1/document-loader" />
+											<input class="glass-input w-full px-3 py-2 text-sm dark:text-gray-300" bind:value={RAGConfig.EXTERNAL_DOCUMENT_LOADER_URL} placeholder="填写外部文档解析接口完整 URL" />
 											<div class="mt-1 text-xs text-gray-400 dark:text-gray-500">
-												填写文档加载器服务的基地址，例如 `https://api.example.com/v1/document-loader`。不要填写 `/process`、`/v1/chat/completions` 等具体接口路径，系统会自动在该地址后追加 `/process` 进行请求。
+												这里填写完整请求 URL。该接口需兼容外部文档解析协议：接收 `PUT` 文件二进制并返回 `Document JSON`，不适用于 `/v1/chat/completions` 这类聊天补全接口。
 											</div>
 										</div>
 										<div>
@@ -1475,9 +1498,23 @@
 										</div>
 									</div>
 								{:else if selectedExtractionEngine === 'paddleocr'}
-									<div>
-										<div class="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">服务地址</div>
-										<input class="glass-input w-full px-3 py-2 text-sm dark:text-gray-300" placeholder="http://localhost:8080/ocr" bind:value={RAGConfig.DOCUMENT_PROVIDER_CONFIGS.paddleocr.server_url} />
+									<div class="space-y-3">
+										<div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+											<div>
+												<div class="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">OCR 接口地址</div>
+												<input class="glass-input w-full px-3 py-2 text-sm dark:text-gray-300" placeholder="https://your-service.aistudio-hub.baidu.com/ocr" bind:value={RAGConfig.DOCUMENT_PROVIDER_CONFIGS.paddleocr.server_url} />
+												<div class="mt-1 text-xs text-gray-400 dark:text-gray-500">
+													优先填写第三方 PaddleOCR OCR 完整接口地址。按官方文档，常见云端地址形态为 `https://你的服务名.aistudio-hub.baidu.com/ocr`；自建服务常见为 `http://127.0.0.1:8080/ocr`。
+												</div>
+											</div>
+											<div>
+												<div class="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">访问令牌 / API 密钥</div>
+												<SensitiveInput placeholder="第三方服务通常需要；留空表示不使用鉴权" bind:value={RAGConfig.DOCUMENT_PROVIDER_CONFIGS.paddleocr.api_key} />
+												<div class="mt-1 text-xs text-gray-400 dark:text-gray-500">
+													若填写裸令牌，系统默认按官方常见格式发送 `Authorization: token &lt;TOKEN&gt;`；如服务商要求其他前缀，可直接填写完整值，例如 `Bearer xxx`。
+												</div>
+											</div>
+										</div>
 									</div>
 								{/if}
 							</div>
@@ -1553,7 +1590,7 @@
 									<input
 										class="glass-input w-full px-3 py-2 text-sm dark:text-gray-300"
 										type="number"
-										placeholder={$i18n.t('0 = disabled')}
+										placeholder="0 表示关闭"
 										bind:value={RAGConfig.CHUNK_MIN_SIZE}
 										autocomplete="off"
 										min="0"
@@ -1586,7 +1623,7 @@
 										<input
 											class="glass-input w-full px-3 py-2 text-sm dark:text-gray-300"
 											type="number"
-											placeholder={$i18n.t('Leave empty for unlimited')}
+											placeholder="留空表示不限制"
 											bind:value={RAGConfig.FILE_MAX_SIZE}
 											autocomplete="off"
 											min="0"
@@ -1605,7 +1642,7 @@
 										<input
 											class="glass-input w-full px-3 py-2 text-sm dark:text-gray-300"
 											type="number"
-											placeholder={$i18n.t('Leave empty for unlimited')}
+											placeholder="留空表示不限制"
 											bind:value={RAGConfig.FILE_MAX_COUNT}
 											autocomplete="off"
 											min="0"
@@ -1830,9 +1867,7 @@
 							{/if}
 
 							<div class="mt-2 text-xs text-gray-400 dark:text-gray-500">
-								{$i18n.t(
-									'Warning: If you update or change your embedding model, you will need to re-import all documents.'
-								)}
+								更换嵌入模型后，通常需要重新导入或重建全部文档索引。
 							</div>
 
 								{#if embeddingEngine === 'ollama' || embeddingEngine === 'openai' || embeddingEngine === 'azure_openai'}
@@ -2095,18 +2130,14 @@
 													class="glass-input w-full px-3 py-2 text-sm dark:text-gray-300"
 													type="number"
 													step="0.01"
-													placeholder={$i18n.t('Enter Score')}
+													placeholder="填写阈值分数"
 													bind:value={RAGConfig.RELEVANCE_THRESHOLD}
 													autocomplete="off"
 													min="0.0"
-													title={$i18n.t(
-														'The score should be a value between 0.0 (0%) and 1.0 (100%).'
-													)}
+													title="分数范围为 0.0 到 1.0。"
 												/>
 												<div class="mt-1 text-xs text-gray-400 dark:text-gray-500">
-													{$i18n.t(
-														'Note: If you set a minimum score, the search will only return documents with a score greater than or equal to the minimum score.'
-													)}
+													设置后，仅返回分数大于或等于该阈值的结果。
 												</div>
 											</div>
 										</div>
@@ -2119,38 +2150,30 @@
 							<div class="space-y-4">
 								<div>
 									<div class="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">
-										{$i18n.t('RAG System Context')}
+										RAG 系统上下文
 									</div>
 									<Tooltip
-										content={$i18n.t(
-											'Static system instruction prepended to RAG context for KV cache reuse'
-										)}
+										content="固定追加在 RAG 上下文前的系统指令，可提升 KV Cache 复用稳定性。"
 										placement="top-start"
 										className="w-full"
 									>
 										<Textarea
 											bind:value={RAGConfig.RAG_SYSTEM_CONTEXT}
-											placeholder={$i18n.t(
-												'Leave empty for no static prefix, or enter system instructions for RAG queries'
-											)}
+											placeholder="留空表示不使用固定系统前缀；也可以填写面向 RAG 查询的系统指令"
 										/>
 									</Tooltip>
 								</div>
 
 								<div class="border-t border-gray-100/60 pt-4 dark:border-gray-800/40">
-									<div class="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('RAG Template')}</div>
+									<div class="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">RAG 提示模板</div>
 									<Tooltip
-										content={$i18n.t(
-											'Leave empty to use the default prompt, or enter a custom prompt'
-										)}
+										content="留空时使用默认提示词，也可以在这里填写自定义模板。"
 										placement="top-start"
 										className="w-full"
 									>
 										<Textarea
 											bind:value={RAGConfig.RAG_TEMPLATE}
-											placeholder={$i18n.t(
-												'Leave empty to use the default prompt, or enter a custom prompt'
-											)}
+											placeholder="留空表示使用默认提示词；也可以填写自定义模板"
 										/>
 									</Tooltip>
 								</div>

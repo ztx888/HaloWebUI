@@ -216,6 +216,11 @@ def _get_loader_for_provider(
         EXTERNAL_DOCUMENT_LOADER_URL=getattr(
             request.app.state.config, "EXTERNAL_DOCUMENT_LOADER_URL", ""
         ),
+        EXTERNAL_DOCUMENT_LOADER_URL_IS_FULL_PATH=getattr(
+            request.app.state.config,
+            "EXTERNAL_DOCUMENT_LOADER_URL_IS_FULL_PATH",
+            False,
+        ),
         EXTERNAL_DOCUMENT_LOADER_API_KEY=getattr(
             request.app.state.config, "EXTERNAL_DOCUMENT_LOADER_API_KEY", ""
         ),
@@ -847,6 +852,18 @@ class PaddleOCRLoader:
         self.file_path = file_path
         self.config = config
 
+    def _build_headers(self) -> dict[str, str]:
+        api_key = str(self.config.get("api_key") or "").strip()
+        if not api_key:
+            return {}
+
+        if api_key.lower().startswith(("bearer ", "token ")):
+            auth_value = api_key
+        else:
+            auth_value = f"token {api_key}"
+
+        return {"Authorization": auth_value}
+
     def load(self) -> list[Document]:
         server_url = str(self.config.get("server_url") or "").strip()
         if not server_url:
@@ -859,7 +876,12 @@ class PaddleOCRLoader:
             "fileType": file_type,
             "file": base64.b64encode(_read_bytes(self.file_path)).decode("utf-8"),
         }
-        response = requests.post(server_url, json=payload, timeout=120)
+        response = requests.post(
+            server_url,
+            json=payload,
+            headers=self._build_headers(),
+            timeout=120,
+        )
         data = _requests_json(response)
 
         results = (

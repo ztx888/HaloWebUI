@@ -1,7 +1,7 @@
 import logging
 import os
 from typing import List
-from urllib.parse import quote
+from urllib.parse import quote, urlparse, urlunparse
 
 import requests
 from langchain_core.document_loaders import BaseLoader
@@ -12,17 +12,27 @@ from open_webui.utils.headers import include_user_info_headers
 log = logging.getLogger(__name__)
 
 
+def _build_legacy_process_url(url: str) -> str:
+    parsed = urlparse(url)
+    path = (parsed.path or "").rstrip("/")
+    if path.endswith("/process"):
+        return urlunparse(parsed._replace(path=path))
+    return urlunparse(parsed._replace(path=f"{path}/process" if path else "/process"))
+
+
 class ExternalDocumentLoader(BaseLoader):
     def __init__(
         self,
         file_path,
         url: str,
         api_key: str,
+        url_is_full_path: bool = False,
         mime_type=None,
         user=None,
         **kwargs,
     ) -> None:
         self.url = url
+        self.url_is_full_path = url_is_full_path
         self.api_key = api_key
         self.file_path = file_path
         self.mime_type = mime_type
@@ -36,7 +46,7 @@ class ExternalDocumentLoader(BaseLoader):
         if self.mime_type is not None:
             headers["Content-Type"] = self.mime_type
 
-        if self.api_key is not None:
+        if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
         try:
@@ -47,10 +57,14 @@ class ExternalDocumentLoader(BaseLoader):
         if self.user is not None:
             headers = include_user_info_headers(headers, self.user)
 
-        url = self.url[:-1] if self.url.endswith("/") else self.url
+        url = str(self.url or "").strip()
+        if self.url_is_full_path:
+            request_url = url
+        else:
+            request_url = _build_legacy_process_url(url)
 
         try:
-            response = requests.put(f"{url}/process", data=data, headers=headers)
+            response = requests.put(request_url, data=data, headers=headers)
         except Exception as exc:
             log.error(f"Error connecting to endpoint: {exc}")
             raise Exception(f"Error connecting to endpoint: {exc}") from exc
