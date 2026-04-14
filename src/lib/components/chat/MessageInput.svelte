@@ -26,7 +26,15 @@
 		compressImage,
 		convertHeicToJpeg,
 		createMessagesList,
+		extractInputVariables,
 		extractCurlyBraceWords,
+		getAge,
+		getCurrentDateTime,
+		getFormattedDate,
+		getFormattedTime,
+		getUserPosition,
+		getUserTimezone,
+		getWeekday,
 		isAnimatedImage,
 		isHeicFile
 	} from '$lib/utils';
@@ -39,6 +47,7 @@
 	import { uploadFile } from '$lib/apis/files';
 	import { generateAutoCompletion } from '$lib/apis';
 	import { deleteFileById } from '$lib/apis/files';
+	import { getSessionUser } from '$lib/apis/auths';
 
 	import { WEBUI_BASE_URL, WEBUI_API_BASE_URL, PASTED_TEXT_CHARACTER_LIMIT } from '$lib/constants';
 
@@ -47,10 +56,13 @@
 	import VoiceRecording from './MessageInput/VoiceRecording.svelte';
 	import FilesOverlay from './MessageInput/FilesOverlay.svelte';
 	import Commands from './MessageInput/Commands.svelte';
+	import InputVariablesModal from './MessageInput/InputVariablesModal.svelte';
 	import ThinkingControl from './MessageInput/ThinkingControl.svelte';
 	import SendMenu from './MessageInput/SendMenu.svelte';
+	import CommandSuggestionList from './MessageInput/CommandSuggestionList.svelte';
 
 	import RichTextInput from '../common/RichTextInput.svelte';
+	import { getSuggestionRenderer } from '../common/RichTextInput/suggestions';
 	import Tooltip from '../common/Tooltip.svelte';
 	import FileItem from '../common/FileItem.svelte';
 	import Image from '../common/Image.svelte';
@@ -125,6 +137,135 @@
 		reasoningEffort,
 		maxThinkingTokens
 	});
+
+	let suggestions = null;
+	let command = '';
+	let showInputVariablesModal = false;
+	let inputVariables = {};
+	let inputVariableValues = {};
+	let inputVariablesModalCallback = (_variableValues) => {};
+
+	const replaceVariablesInPlainText = (variables: Record<string, any>) => {
+		prompt = prompt.replace(/{{\s*([^|}]+)(?:\|[^}]*)?\s*}}/g, (match, varName) => {
+			const trimmedVarName = varName.trim();
+			return Object.prototype.hasOwnProperty.call(variables, trimmedVarName)
+				? String(variables[trimmedVarName])
+				: match;
+		});
+	};
+
+	const inputVariableHandler = async (text: string): Promise<string> => {
+		inputVariables = extractInputVariables(text);
+
+		if (Object.keys(inputVariables).length === 0) {
+			return text;
+		}
+
+		showInputVariablesModal = true;
+		return await new Promise<string>((resolve) => {
+			inputVariablesModalCallback = (variableValues) => {
+				inputVariableValues = { ...inputVariableValues, ...variableValues };
+				if (typeof chatInputElement?.replaceVariables === 'function') {
+					chatInputElement.replaceVariables(inputVariableValues);
+				} else {
+					replaceVariablesInPlainText(inputVariableValues);
+				}
+				showInputVariablesModal = false;
+				resolve(text);
+			};
+		});
+	};
+
+	const textVariableHandler = async (text: string) => {
+		if (text.includes('{{CLIPBOARD}}')) {
+			const clipboardText = await navigator.clipboard.readText().catch(() => {
+				toast.error($i18n.t('Failed to read clipboard contents'));
+				return '{{CLIPBOARD}}';
+			});
+
+			const clipboardItems = await navigator.clipboard.read().catch((error) => {
+				console.error('Failed to read clipboard items:', error);
+				return [];
+			});
+
+			for (const item of clipboardItems) {
+				for (const type of item.types) {
+					if (type.startsWith('image/')) {
+						const blob = await item.getType(type);
+						const file = new File([blob], `clipboard-image.${type.split('/')[1]}`, {
+							type
+						});
+						await inputFilesHandler([file]);
+					}
+				}
+			}
+
+			text = text.replaceAll('{{CLIPBOARD}}', clipboardText.replaceAll('\r\n', '\n'));
+		}
+
+		if (text.includes('{{USER_LOCATION}}')) {
+			let location;
+			try {
+				location = await getUserPosition();
+			} catch {
+				toast.error($i18n.t('Location access not allowed'));
+				location = 'LOCATION_UNKNOWN';
+			}
+			text = text.replaceAll('{{USER_LOCATION}}', String(location));
+		}
+
+		const sessionUser = await getSessionUser(localStorage.token).catch(() => null);
+
+		if (text.includes('{{USER_NAME}}')) {
+			text = text.replaceAll('{{USER_NAME}}', sessionUser?.name || 'User');
+		}
+
+		if (text.includes('{{USER_EMAIL}}') && sessionUser?.email) {
+			text = text.replaceAll('{{USER_EMAIL}}', sessionUser.email);
+		}
+
+		if (text.includes('{{USER_BIO}}') && sessionUser?.bio) {
+			text = text.replaceAll('{{USER_BIO}}', sessionUser.bio);
+		}
+
+		if (text.includes('{{USER_GENDER}}') && sessionUser?.gender) {
+			text = text.replaceAll('{{USER_GENDER}}', sessionUser.gender);
+		}
+
+		if (text.includes('{{USER_BIRTH_DATE}}') && sessionUser?.date_of_birth) {
+			text = text.replaceAll('{{USER_BIRTH_DATE}}', sessionUser.date_of_birth);
+		}
+
+		if (text.includes('{{USER_AGE}}') && sessionUser?.date_of_birth) {
+			text = text.replaceAll('{{USER_AGE}}', getAge(sessionUser.date_of_birth));
+		}
+
+		if (text.includes('{{USER_LANGUAGE}}')) {
+			text = text.replaceAll('{{USER_LANGUAGE}}', localStorage.getItem('locale') || 'en-US');
+		}
+
+		if (text.includes('{{CURRENT_DATE}}')) {
+			text = text.replaceAll('{{CURRENT_DATE}}', getFormattedDate());
+		}
+
+		if (text.includes('{{CURRENT_TIME}}')) {
+			text = text.replaceAll('{{CURRENT_TIME}}', getFormattedTime());
+		}
+
+		if (text.includes('{{CURRENT_DATETIME}}')) {
+			text = text.replaceAll('{{CURRENT_DATETIME}}', getCurrentDateTime());
+		}
+
+		if (text.includes('{{CURRENT_TIMEZONE}}')) {
+			text = text.replaceAll('{{CURRENT_TIMEZONE}}', getUserTimezone());
+		}
+
+		if (text.includes('{{CURRENT_WEEKDAY}}')) {
+			text = text.replaceAll('{{CURRENT_WEEKDAY}}', getWeekday());
+		}
+
+		return text;
+	};
 
 	$: normalizedWebSearchMode = normalizeWebSearchMode(webSearchMode, 'off');
 	$: webSearchActive = isWebSearchEnabled(normalizedWebSearchMode);
@@ -239,6 +380,83 @@
 			top: element.scrollHeight,
 			behavior: 'auto'
 		});
+	};
+
+	const getCommand = () => {
+		const chatInput = document.getElementById('chat-input');
+		if (!chatInput) {
+			return '';
+		}
+
+		return chatInputElement?.getWordAtDocPos?.() ?? '';
+	};
+
+	const replaceCommandWithText = (text: string) => {
+		const chatInput = document.getElementById('chat-input');
+		if (!chatInput) {
+			return;
+		}
+
+		chatInputElement?.replaceCommandWithText?.(text);
+	};
+
+	const insertTextAtCursor = async (text: string) => {
+		const chatInput = document.getElementById('chat-input');
+		if (!chatInput) {
+			return;
+		}
+
+		text = await textVariableHandler(text);
+
+		if (command) {
+			replaceCommandWithText(text);
+		} else {
+			chatInputElement?.insertContent?.(text);
+		}
+
+		await tick();
+		text = await inputVariableHandler(text);
+		await tick();
+
+		const chatInputContainer = document.getElementById('chat-input-container');
+		if (chatInputContainer) {
+			chatInputContainer.scrollTop = chatInputContainer.scrollHeight;
+		}
+
+		await tick();
+		chatInputElement?.focus?.();
+		chatInput?.dispatchEvent(new Event('input'));
+	};
+
+	const replaceLastWordInTextarea = (replacement: string) => {
+		const lines = prompt.split('\n');
+		const lastLine = lines.pop() ?? '';
+		const words = lastLine.split(' ');
+		words.pop();
+
+		if (replacement) {
+			words.push(replacement);
+		}
+
+		lines.push(words.join(' '));
+		prompt = lines.join('\n');
+	};
+
+	const insertTextIntoTextareaPrompt = async (text: string) => {
+		const textarea = document.getElementById('chat-input') as HTMLTextAreaElement | null;
+		if (!textarea) {
+			return;
+		}
+
+		text = await textVariableHandler(text);
+		replaceLastWordInTextarea(text);
+
+		await tick();
+		text = await inputVariableHandler(text);
+		await tick();
+
+		textarea.focus();
+		textarea.dispatchEvent(new Event('input'));
 	};
 
 	const screenCaptureHandler = async () => {
@@ -501,6 +719,46 @@
 	};
 
 	onMount(async () => {
+		suggestions = ['@', '/', '#', '$'].map((char) => ({
+			char,
+			render: getSuggestionRenderer(CommandSuggestionList, {
+				i18n,
+				onSelect: (event) => {
+					const { type, data } = event;
+
+					if (type === 'model') {
+						atSelectedModel = data;
+					}
+
+					document.getElementById('chat-input')?.focus();
+				},
+				insertTextHandler: insertTextAtCursor,
+				onUpload: (event) => {
+					const { type, data } = event;
+
+					if (type === 'file') {
+						if (files.find((file) => file.id === data.id)) {
+							return;
+						}
+
+						files = [
+							...files,
+							{
+								...data,
+								status: 'processed'
+							}
+						];
+					} else {
+						if (files.find((file) => file.url === data || file.name === data)) {
+							return;
+						}
+
+						dispatch('upload', event);
+					}
+				}
+			})
+		}));
+
 		loaded = true;
 
 		window.setTimeout(() => {
@@ -535,6 +793,11 @@
 <FilesOverlay show={dragged} />
 
 <ToolServersModal bind:show={showTools} {selectedToolIds} />
+<InputVariablesModal
+	bind:show={showInputVariablesModal}
+	variables={inputVariables}
+	onSave={inputVariablesModalCallback}
+/>
 
 {#if loaded}
 	<div class="w-full font-primary">
@@ -613,24 +876,26 @@
 						</div>
 					{/if}
 
-					<Commands
-						bind:this={commandsElement}
-						bind:prompt
-						bind:files
-						on:upload={(e) => {
-							dispatch('upload', e.detail);
-						}}
-						on:select={(e) => {
-							const data = e.detail;
+					{#if !($settings?.richTextInput ?? true)}
+						<Commands
+							bind:this={commandsElement}
+							bind:prompt
+							bind:files
+							insertTextHandler={insertTextIntoTextareaPrompt}
+							on:upload={(e) => {
+								dispatch('upload', e.detail);
+							}}
+							on:select={(e) => {
+								const data = e.detail;
 
-							if (data?.type === 'model') {
-								atSelectedModel = data.data;
-							}
+								if (data?.type === 'model') {
+									atSelectedModel = data.data;
+								}
 
-							const chatInputElement = document.getElementById('chat-input');
-							chatInputElement?.focus();
-						}}
-					/>
+								document.getElementById('chat-input')?.focus();
+							}}
+						/>
+					{/if}
 				</div>
 			</div>
 		</div>
@@ -802,7 +1067,7 @@
 										>
 											<RichTextInput
 												bind:this={chatInputElement}
-												bind:value={prompt}
+												value={prompt}
 												id="chat-input"
 												messageInput={true}
 												showFormattingToolbar={$settings?.showFormattingToolbar ?? false}
@@ -818,6 +1083,11 @@
 												largeTextAsFile={$settings?.largeTextAsFile ?? false}
 												autocomplete={$config?.features?.enable_autocomplete_generation &&
 													($settings?.promptAutocomplete ?? false)}
+												{suggestions}
+												onChange={(content) => {
+													prompt = content.md;
+													command = getCommand();
+												}}
 												generateAutoCompletion={async (text) => {
 													if (selectedModelIds.length === 0 || !selectedModelIds.at(0)) {
 														toast.error($i18n.t('Please select a model first.'));
@@ -844,15 +1114,14 @@
 												on:keydown={async (e) => {
 													e = e.detail.event;
 
-													const isCtrlPressed = e.ctrlKey || e.metaKey; // metaKey is for Cmd key on Mac
-													const commandsContainerElement =
-														document.getElementById('commands-container');
+													const isCtrlPressed = e.ctrlKey || e.metaKey;
+													const suggestionsContainerElement =
+														document.getElementById('suggestions-container');
 
 													if (e.key === 'Escape') {
 														stopResponse();
 													}
 
-													// Command/Ctrl + Shift + Enter to submit a message pair
 													if (isCtrlPressed && e.key === 'Enter' && e.shiftKey) {
 														e.preventDefault();
 														createMessagePair(prompt);
@@ -875,51 +1144,7 @@
 														}
 													}
 
-													if (commandsContainerElement) {
-														if (commandsContainerElement && e.key === 'ArrowUp') {
-															e.preventDefault();
-															commandsElement.selectUp();
-
-															const commandOptionButton = [
-																...document.getElementsByClassName('selected-command-option-button')
-															]?.at(-1);
-															commandOptionButton.scrollIntoView({ block: 'center' });
-														}
-
-														if (commandsContainerElement && e.key === 'ArrowDown') {
-															e.preventDefault();
-															commandsElement.selectDown();
-
-															const commandOptionButton = [
-																...document.getElementsByClassName('selected-command-option-button')
-															]?.at(-1);
-															commandOptionButton.scrollIntoView({ block: 'center' });
-														}
-
-														if (commandsContainerElement && e.key === 'Tab') {
-															e.preventDefault();
-
-															const commandOptionButton = [
-																...document.getElementsByClassName('selected-command-option-button')
-															]?.at(-1);
-
-															commandOptionButton?.click();
-														}
-
-														if (commandsContainerElement && e.key === 'Enter') {
-															e.preventDefault();
-
-															const commandOptionButton = [
-																...document.getElementsByClassName('selected-command-option-button')
-															]?.at(-1);
-
-															if (commandOptionButton) {
-																commandOptionButton?.click();
-															} else {
-																document.getElementById('send-message-button')?.click();
-															}
-														}
-													} else {
+													if (!suggestionsContainerElement) {
 														if (
 															!$mobile ||
 															!(
@@ -932,10 +1157,6 @@
 																return;
 															}
 
-															// Uses keyCode '13' for Enter key for chinese/japanese keyboards.
-															//
-															// Depending on the user's settings, it will send the message
-															// either when Enter is pressed or when Ctrl+Enter is pressed.
 															const enterPressed =
 																($settings?.ctrlEnterToSend ?? false)
 																	? (e.key === 'Enter' || e.keyCode === 13) && isCtrlPressed
@@ -951,7 +1172,6 @@
 													}
 
 													if (e.key === 'Escape') {
-														console.log('Escape');
 														atSelectedModel = undefined;
 														selectedToolIds = [];
 														webSearchMode = 'off';
@@ -960,7 +1180,6 @@
 												}}
 												on:paste={async (e) => {
 													e = e.detail.event;
-													console.log(e);
 
 													const clipboardData = e.clipboardData || window.clipboardData;
 

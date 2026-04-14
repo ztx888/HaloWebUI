@@ -214,9 +214,9 @@
 									>{$i18n.t('Disabled')}</span
 								>
 							{/if}
-							<div class=" text-xs overflow-hidden text-ellipsis line-clamp-1">
-								{prompt.command}
-							</div>
+								<div class=" text-xs overflow-hidden text-ellipsis line-clamp-1">
+									{prompt.command}
+								</div>
 						</div>
 
 						{#if prompt.tags?.length}

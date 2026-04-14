@@ -1,4 +1,4 @@
-boto3==1.35.53
+-r storage-s3.txt
 googleapis-common-protos==1.63.2
 google-cloud-storage==2.19.0
 azure-identity==1.20.0

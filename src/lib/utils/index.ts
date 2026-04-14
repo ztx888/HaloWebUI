@@ -1043,6 +1043,147 @@ export const promptTemplate = (
 	return template;
 };
 
+export const splitProperties = (str: string, delimiter: string): string[] => {
+	const result: string[] = [];
+	let current = '';
+	let depth = 0;
+	let inString = false;
+	let escapeNext = false;
+
+	for (let i = 0; i < str.length; i++) {
+		const char = str[i];
+
+		if (escapeNext) {
+			current += char;
+			escapeNext = false;
+			continue;
+		}
+
+		if (char === '\\') {
+			current += char;
+			escapeNext = true;
+			continue;
+		}
+
+		if (char === '"' && !escapeNext) {
+			inString = !inString;
+			current += char;
+			continue;
+		}
+
+		if (!inString) {
+			if (char === '{' || char === '[') {
+				depth++;
+			} else if (char === '}' || char === ']') {
+				depth--;
+			}
+
+			if (char === delimiter && depth === 0) {
+				result.push(current.trim());
+				current = '';
+				continue;
+			}
+		}
+
+		current += char;
+	}
+
+	if (current.trim()) {
+		result.push(current.trim());
+	}
+
+	return result;
+};
+
+export const parseJsonValue = (value: string): any => {
+	if (value.startsWith('"') && value.endsWith('"')) {
+		return value.slice(1, -1);
+	}
+
+	if (/^[\[{]/.test(value)) {
+		try {
+			return JSON.parse(value);
+		} catch {
+			return value;
+		}
+	}
+
+	if (value === 'true') {
+		return true;
+	}
+
+	if (value === 'false') {
+		return false;
+	}
+
+	if (value === 'null') {
+		return null;
+	}
+
+	if (value !== '' && !Number.isNaN(Number(value))) {
+		return Number(value);
+	}
+
+	return value;
+};
+
+export const parseVariableDefinition = (definition: string): Record<string, any> => {
+	const parts = splitProperties(definition, ':');
+	const [firstPart, ...propertyParts] = parts;
+	const type = firstPart.startsWith('type=') ? firstPart.slice(5) : firstPart;
+
+	const properties = propertyParts.reduce(
+		(props, part) => {
+			const trimmed = part.trim();
+			if (!trimmed) {
+				return props;
+			}
+
+			const equalsParts = splitProperties(trimmed, '=');
+			if (equalsParts.length === 1) {
+				const flagName = equalsParts[0].trim();
+				return flagName.length > 0 ? { ...props, [flagName]: true } : props;
+			}
+
+			const [propertyName, ...valueParts] = equalsParts;
+			const propertyValueRaw = valueParts.join('=');
+			if (!propertyName || propertyValueRaw == null) {
+				return props;
+			}
+
+			return {
+				...props,
+				[propertyName.trim()]: parseJsonValue(propertyValueRaw.trim())
+			};
+		},
+		{} as Record<string, any>
+	);
+
+	return { type, ...properties };
+};
+
+export const extractInputVariables = (text: string): Record<string, any> => {
+	const regex = /{{\s*([^|}\s]+)\s*\|\s*([^}]+)\s*}}/g;
+	const regularRegex = /{{\s*([^|}\s]+)\s*}}/g;
+	const variables: Record<string, any> = {};
+	let match;
+
+	while ((match = regex.exec(text)) !== null) {
+		const varName = match[1].trim();
+		const definition = match[2].trim();
+		variables[varName] = parseVariableDefinition(definition);
+	}
+
+	while ((match = regularRegex.exec(text)) !== null) {
+		const varName = match[1].trim();
+		if (!variables.hasOwnProperty(varName)) {
+			variables[varName] = { type: 'text' };
+		}
+	}
+
+	return variables;
+};
+
 /**
  * This function is used to replace placeholders in a template string with the provided prompt.
  * The placeholders can be in the following formats:
@@ -1219,6 +1360,48 @@ export const getWeekday = () => {
 	const date = new Date();
 	const weekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 	return weekdays[date.getDay()];
+};
+
+export const getAge = (dateOfBirth: string) => {
+	if (!dateOfBirth) {
+		return '';
+	}
+
+	const birthDate = new Date(dateOfBirth);
+	if (Number.isNaN(birthDate.getTime())) {
+		return '';
+	}
+
+	const today = new Date();
+	let age = today.getFullYear() - birthDate.getFullYear();
+	const monthDiff = today.getMonth() - birthDate.getMonth();
+
+	if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
+		age--;
+	}
+
+	return String(age);
+};
+
+export const isYoutubeUrl = (value: string) => {
+	if (!value) {
+		return false;
+	}
+
+	try {
+		const url = new URL(value);
+		const hostname = url.hostname.toLowerCase();
+		return (
+			hostname === 'youtube.com' ||
+			hostname === 'www.youtube.com' ||
+			hostname === 'm.youtube.com' ||
+			hostname === 'youtu.be' ||
+			hostname === 'www.youtu.be' ||
+			hostname === 'www.youtube-nocookie.com'
+		);
+	} catch {
+		return false;
+	}
 };
 
 export const createMessagesList = (history, messageId) => {

@@ -21,7 +21,7 @@ from open_webui.models.users import (
 from open_webui.socket.main import get_active_status_by_user_id
 from open_webui.constants import ERROR_MESSAGES
 from open_webui.env import SRC_LOG_LEVELS
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -70,6 +70,36 @@ async def get_users(
     user=Depends(get_admin_user),
 ):
     return Users.get_users(skip, limit)
+
+
+@router.get("/search")
+async def search_users(
+    query: str = Query(default=""),
+    user=Depends(get_verified_user),
+):
+    query_lower = query.strip().lower()
+    users = Users.get_users()
+
+    if query_lower:
+        users = [
+            item
+            for item in users
+            if query_lower in (item.name or "").lower()
+            or query_lower in (item.email or "").lower()
+            or query_lower in (getattr(item, "username", "") or "").lower()
+        ]
+
+    return {
+        "users": [
+            {
+                "id": item.id,
+                "name": item.name,
+                "email": item.email,
+                "profile_image_url": getattr(item, "profile_image_url", ""),
+            }
+            for item in users[:20]
+        ]
+    }
 
 
 ############################

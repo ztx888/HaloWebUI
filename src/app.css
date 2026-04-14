@@ -948,8 +948,19 @@ input[type='range']::-moz-range-thumb {
 		sans-serif,
 		'Apple Color Emoji',
 		'Segoe UI Emoji',
-		'Segoe UI Symbol',
-		'Noto Color Emoji';
+			'Segoe UI Symbol',
+			'Noto Color Emoji';
+}
+
+.tippy-box[data-theme~='transparent'] {
+	background-color: transparent;
+	border: 0;
+	box-shadow: none;
+	color: inherit;
+}
+
+.tippy-box[data-theme~='transparent'] > .tippy-content {
+	padding: 0;
 }
 
 .password {
@@ -1004,6 +1015,22 @@ input[type='range']::-moz-range-thumb {
 
 	content: attr(data-suggestion);
 	pointer-events: none;
+}
+
+.ProseMirror .suggestion {
+	display: inline-flex;
+	align-items: center;
+	border-radius: 0.55rem;
+	padding: 0.02rem 0.28rem;
+	background: rgba(59, 130, 246, 0.12);
+	color: rgb(37, 99, 235);
+	box-decoration-break: clone;
+	-webkit-box-decoration-break: clone;
+}
+
+.dark .ProseMirror .suggestion {
+	background: rgba(96, 165, 250, 0.18);
+	color: rgb(191, 219, 254);
 }
 
 .tiptap > pre > code {

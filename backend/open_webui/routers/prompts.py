@@ -265,7 +265,7 @@ async def delete_prompt_by_id(prompt_id: str, user=Depends(get_verified_user)):
 
 @router.get("/command/{command}", response_model=Optional[PromptModel])
 async def get_prompt_by_command(command: str, user=Depends(get_verified_user)):
-    prompt = Prompts.get_prompt_by_command(f"/{command}")
+    prompt = Prompts.get_prompt_by_command(command)
 
     if prompt:
         if can_read_resource(user, prompt):
@@ -283,7 +283,7 @@ async def update_prompt_by_command(
     form_data: PromptForm,
     user=Depends(get_verified_user),
 ):
-    prompt = Prompts.get_prompt_by_command(f"/{command}")
+    prompt = Prompts.get_prompt_by_command(command)
     if not prompt:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -307,7 +307,7 @@ async def update_prompt_by_command(
         public_permission_key="sharing.public_prompts",
     )
 
-    result = Prompts.update_prompt_by_command(f"/{command}", form_data)
+    result = Prompts.update_prompt_by_command(command, form_data)
     if result:
         return result
     raise HTTPException(
@@ -321,7 +321,7 @@ async def toggle_prompt_by_command(
     command: str,
     user=Depends(get_verified_user),
 ):
-    prompt = Prompts.get_prompt_by_command(f"/{command}")
+    prompt = Prompts.get_prompt_by_command(command)
     if not prompt:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -334,7 +334,7 @@ async def toggle_prompt_by_command(
             detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
         )
 
-    result = Prompts.toggle_prompt_by_command(f"/{command}", not prompt.is_active)
+    result = Prompts.toggle_prompt_by_command(command, not prompt.is_active)
     if result:
         return result
     raise HTTPException(
@@ -345,7 +345,7 @@ async def toggle_prompt_by_command(
 
 @router.delete("/command/{command}/delete", response_model=bool)
 async def delete_prompt_by_command(command: str, user=Depends(get_verified_user)):
-    prompt = Prompts.get_prompt_by_command(f"/{command}")
+    prompt = Prompts.get_prompt_by_command(command)
     if not prompt:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -358,4 +358,4 @@ async def delete_prompt_by_command(command: str, user=Depends(get_verified_user)
             detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
         )
 
-    return Prompts.delete_prompt_by_command(f"/{command}")
+    return Prompts.delete_prompt_by_command(command)

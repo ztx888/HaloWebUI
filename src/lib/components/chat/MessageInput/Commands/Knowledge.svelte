@@ -1,39 +1,61 @@
 <script lang="ts">
+	import { getContext, onDestroy, onMount, tick } from 'svelte';
+	import { folders } from '$lib/stores';
+	import { getFolders } from '$lib/apis/folders';
+	import { searchKnowledgeBases, searchKnowledgeFiles } from '$lib/apis/knowledge';
+	import { getNoteById, getNotes } from '$lib/apis/notes';
+	import {
+		isValidHttpUrl,
+		isYoutubeUrl
+	} from '$lib/utils';
+	import Tooltip from '$lib/components/common/Tooltip.svelte';
+	import DocumentPage from '$lib/components/icons/Document.svelte';
+	import Database from '$lib/components/icons/BookOpen.svelte';
+	import GlobeAlt from '$lib/components/icons/GlobeAlt.svelte';
+	import Youtube from '$lib/components/icons/GlobeAlt.svelte';
+	import Folder from '$lib/components/icons/FolderOpen.svelte';
+	import Bookmark from '$lib/components/icons/Bookmark.svelte';
 	import { toast } from 'svelte-sonner';
-	import Fuse from 'fuse.js';
-
-	import dayjs from 'dayjs';
-	import relativeTime from 'dayjs/plugin/relativeTime';
-	dayjs.extend(relativeTime);
-
-	import { createEventDispatcher, tick, getContext, onMount } from 'svelte';
-	import { removeLastWordFromString, isValidHttpUrl } from '$lib/utils';
-	import { knowledge } from '$lib/stores';
-	import { getNotes, getNoteById } from '$lib/apis/notes';
 
 	const i18n = getContext('i18n');
 
-	export let prompt = '';
-	export let command = '';
+	export let query = '';
+	export let onSelect = (_event) => {};
+	export let filteredItems = [];
 
-	const dispatch = createEventDispatcher();
 	let selectedIdx = 0;
-
 	let items = [];
-	let fuse = null;
+	let folderItems = [];
+	let knowledgeItems = [];
+	let fileItems = [];
+	let noteItems = [];
+	let searchDebounceTimer: ReturnType<typeof setTimeout>;
 
-	let filteredItems = [];
-	$: if (fuse) {
-		filteredItems = command.slice(1)
-			? fuse.search(command).map((e) => {
-					return e.item;
-				})
-			: items;
-	}
+	const decodeString = (str: string) => {
+		try {
+			return decodeURIComponent(str);
+		} catch {
+			return str;
+		}
+	};
 
-	$: if (command) {
+	$: items = [...folderItems, ...knowledgeItems, ...fileItems, ...noteItems];
+	$: filteredItems = [
+		...(query.startsWith('http')
+			? isYoutubeUrl(query)
+				? [{ type: 'youtube', name: query, description: query }]
+				: [{ type: 'web', name: query, description: query }]
+			: []),
+		...items
+	];
+
+	$: if (query) {
 		selectedIdx = 0;
 	}
+
+	onDestroy(() => {
+		clearTimeout(searchDebounceTimer);
+	});
 
 	export const selectUp = () => {
 		selectedIdx = Math.max(0, selectedIdx - 1);
@@ -43,333 +65,240 @@
 		selectedIdx = Math.min(selectedIdx + 1, filteredItems.length - 1);
 	};
 
-	const confirmSelect = async (item) => {
-		// For notes, fetch full content and wrap as docs reference
-		if (item.type === 'note') {
-			try {
-				const fullNote = await getNoteById(localStorage.token, item.id);
-				if (fullNote) {
-					dispatch('select', {
-						id: `note-${fullNote.id}`,
-						name: fullNote.title,
-						type: 'note',
-						docs: [
-							{
-								content: fullNote.content,
-								metadata: { source: `note:${fullNote.title}`, name: fullNote.title }
-							}
-						],
-						status: 'processed'
-					});
-				}
-			} catch {
-				dispatch('select', item);
-			}
-		} else {
-			dispatch('select', item);
+	const selectKnowledgeItem = async (item) => {
+		if (!item) {
+			return;
 		}
 
-		prompt = removeLastWordFromString(prompt, command);
-		const chatInputElement = document.getElementById('chat-input');
+		if (item.type === 'note') {
+			const fullNote = await getNoteById(localStorage.token, item.id).catch(() => null);
+			onSelect({
+				type: 'knowledge',
+				data:
+					fullNote !== null
+						? {
+								id: `note-${fullNote.id}`,
+								name: fullNote.title,
+								type: 'note',
+								docs: [
+									{
+										content: fullNote.content,
+										metadata: {
+											source: `note:${fullNote.title}`,
+											name: fullNote.title
+										}
+									}
+								],
+								status: 'processed'
+							}
+						: {
+								id: `note-${item.id}`,
+								name: item.name,
+								type: 'note',
+								docs: [],
+								status: 'processed'
+							}
+			});
+			return;
+		}
 
-		await tick();
-		chatInputElement?.focus();
-		await tick();
+		onSelect({
+			type: 'knowledge',
+			data: item
+		});
 	};
 
-	const confirmSelectWeb = async (url) => {
-		dispatch('url', url);
+	export const select = async () => {
+		const item = filteredItems[selectedIdx];
+		if (!item) {
+			return;
+		}
 
-		prompt = removeLastWordFromString(prompt, command);
-		const chatInputElement = document.getElementById('chat-input');
+		if (item.type === 'youtube' || item.type === 'web') {
+			onSelect({
+				type: 'web',
+				data: item.name
+			});
+			return;
+		}
 
-		await tick();
-		chatInputElement?.focus();
-		await tick();
+		await selectKnowledgeItem(item);
 	};
 
-	const confirmSelectYoutube = async (url) => {
-		dispatch('youtube', url);
-
-		prompt = removeLastWordFromString(prompt, command);
-		const chatInputElement = document.getElementById('chat-input');
-
-		await tick();
-		chatInputElement?.focus();
-		await tick();
+	const getItems = () => {
+		getFolderItems();
+		getKnowledgeItems();
+		getKnowledgeFileItems();
 	};
 
-	onMount(async () => {
-		// Fetch notes in parallel
-		let userNotes = [];
-		try {
-			const notesData = await getNotes(localStorage.token);
-			userNotes = (notesData ?? []).map((n) => ({
-				id: n.id,
-				name: n.title,
-				description: n.content?.slice(0, 100) || '',
-				type: 'note'
-			}));
-		} catch {}
+	const getFolderItems = async () => {
+		folderItems = ($folders ?? [])
+			.map((folder) => ({
+				...folder,
+				type: 'folder',
+				description: 'Folder',
+				title: folder.name
+			}))
+			.filter((folder) => folder.name.toLowerCase().includes(query.toLowerCase()));
+	};
 
-		let legacy_documents = $knowledge
-			.filter((item) => item?.meta?.document)
-			.map((item) => ({
-				...item,
-				type: 'file'
-			}));
-
-		let legacy_collections =
-			legacy_documents.length > 0
-				? [
-						{
-							name: 'All Documents',
-							legacy: true,
-							type: 'collection',
-							description: 'Deprecated (legacy collection), please create a new knowledge base.',
-							title: $i18n.t('All Documents'),
-							collection_names: legacy_documents.map((item) => item.id)
-						},
-
-						...legacy_documents
-							.reduce((a, item) => {
-								return [...new Set([...a, ...(item?.meta?.tags ?? []).map((tag) => tag.name)])];
-							}, [])
-							.map((tag) => ({
-								name: tag,
-								legacy: true,
-								type: 'collection',
-								description: 'Deprecated (legacy collection), please create a new knowledge base.',
-								collection_names: legacy_documents
-									.filter((item) => (item?.meta?.tags ?? []).map((tag) => tag.name).includes(tag))
-									.map((item) => item.id)
-							}))
-					]
-				: [];
-
-		let collections = $knowledge
-			.filter((item) => !item?.meta?.document)
-			.map((item) => ({
+	const getKnowledgeItems = async () => {
+		const res = await searchKnowledgeBases(localStorage.token, query).catch(() => null);
+		if (res) {
+			knowledgeItems = (res.items ?? []).map((item) => ({
 				...item,
 				type: 'collection'
 			}));
-		let collection_files =
-			$knowledge.length > 0
-				? [
-						...$knowledge
-							.reduce((a, item) => {
-								return [
-									...new Set([
-										...a,
-										...(item?.files ?? []).map((file) => ({
-											...file,
-											collection: { name: item.name, description: item.description } // DO NOT REMOVE, USED IN FILE DESCRIPTION/ATTACHMENT
-										}))
-									])
-								];
-							}, [])
-							.map((file) => ({
-								...file,
-								name: file?.meta?.name,
-								description: `${file?.collection?.name} - ${file?.collection?.description}`,
-								type: 'file'
-							}))
-					]
-				: [];
-
-		items = [
-			...collections,
-			...collection_files,
-			...legacy_collections,
-			...legacy_documents,
-			...userNotes
-		].map((item) => {
-			return {
-				...item,
-				...(item?.legacy || item?.meta?.legacy || item?.meta?.document ? { legacy: true } : {})
-			};
-		});
-
-		fuse = new Fuse(items, {
-			keys: ['name', 'description']
-		});
-	});
-
-	const decodeString = (str: string) => {
-		try {
-			return decodeURIComponent(str);
-		} catch (e) {
-			return str;
 		}
 	};
+
+	const getKnowledgeFileItems = async () => {
+		const res = await searchKnowledgeFiles(localStorage.token, query).catch(() => null);
+		if (res) {
+			fileItems = (res.items ?? []).map((item) => ({
+				...item,
+				type: 'file',
+				name: item.filename ?? item.name,
+				description: item.collection ? item.collection.name : ''
+			}));
+		}
+	};
+
+	const getNoteItems = async () => {
+		const res = await getNotes(localStorage.token).catch(() => []);
+		noteItems = (res ?? [])
+			.filter((item) => {
+				const haystack = `${item?.title ?? ''} ${item?.content ?? ''}`.toLowerCase();
+				return haystack.includes(query.toLowerCase());
+			})
+			.map((item) => ({
+				id: item.id,
+				name: item.title,
+				description: (item.content ?? '').replace(/\s+/g, ' ').trim().slice(0, 120),
+				type: 'note'
+			}));
+	};
+
+	onMount(async () => {
+		if ($folders === null) {
+			folders.set(await getFolders(localStorage.token));
+		}
+		getItems();
+		await getNoteItems();
+		await tick();
+	});
+
+	$: if (query !== undefined) {
+		clearTimeout(searchDebounceTimer);
+		searchDebounceTimer = setTimeout(() => {
+			getItems();
+			getNoteItems();
+		}, 200);
+	}
 </script>
 
-{#if filteredItems.length > 0 || prompt.split(' ')?.at(0)?.substring(1).startsWith('http')}
-	<div
-		id="commands-container"
-		class="px-2 mb-2 text-left w-full absolute bottom-0 left-0 right-0 z-10"
-	>
-		<div class="flex w-full rounded-xl border border-gray-100 dark:border-gray-850">
-			<div
-				class="max-h-60 flex flex-col w-full rounded-xl bg-white dark:bg-gray-900 dark:text-gray-100"
-			>
-				<div class="m-1 overflow-y-auto p-1 rounded-r-xl space-y-0.5 scrollbar-hidden">
-					{#each filteredItems as item, idx}
-						<button
-							class=" px-3 py-1.5 rounded-xl w-full text-left flex justify-between items-center {idx ===
-							selectedIdx
-								? ' bg-gray-50 dark:bg-gray-850 dark:text-gray-100 selected-command-option-button'
-								: ''}"
-							type="button"
-							on:click={() => {
-								console.log(item);
-								confirmSelect(item);
-							}}
-							on:mousemove={() => {
-								selectedIdx = idx;
-							}}
-						>
-							<div>
-								<div class=" font-medium text-black dark:text-gray-100 flex items-center gap-1">
-									{#if item.legacy}
-										<div
-											class="bg-gray-500/20 text-gray-700 dark:text-gray-200 rounded-sm uppercase text-xs font-bold px-1 shrink-0"
-										>
-											Legacy
-										</div>
-									{:else if item?.meta?.document}
-										<div
-											class="bg-gray-500/20 text-gray-700 dark:text-gray-200 rounded-sm uppercase text-xs font-bold px-1 shrink-0"
-										>
-											Document
-										</div>
-									{:else if item?.type === 'note'}
-										<div
-											class="bg-blue-500/20 text-blue-700 dark:text-blue-200 rounded-sm uppercase text-xs font-bold px-1 shrink-0"
-										>
-											Note
-										</div>
-									{:else if item?.type === 'file'}
-										<div
-											class="bg-gray-500/20 text-gray-700 dark:text-gray-200 rounded-sm uppercase text-xs font-bold px-1 shrink-0"
-										>
-											File
-										</div>
-									{:else}
-										<div
-											class="bg-green-500/20 text-green-700 dark:text-green-200 rounded-sm uppercase text-xs font-bold px-1 shrink-0"
-										>
-											Collection
-										</div>
-									{/if}
-
-									<div class="line-clamp-1">
-										{decodeString(item?.name)}
-									</div>
-								</div>
-
-								<div class=" text-xs text-gray-600 dark:text-gray-100 line-clamp-1">
-									{item?.description}
-								</div>
-							</div>
-						</button>
-
-						<!-- <div slot="content" class=" pl-2 pt-1 flex flex-col gap-0.5">
-								{#if !item.legacy && (item?.files ?? []).length > 0}
-									{#each item?.files ?? [] as file, fileIdx}
-										<button
-											class=" px-3 py-1.5 rounded-xl w-full text-left flex justify-between items-center hover:bg-gray-50 dark:hover:bg-gray-850 dark:hover:text-gray-100 selected-command-option-button"
-											type="button"
-											on:click={() => {
-												console.log(file);
-											}}
-											on:mousemove={() => {
-												selectedIdx = idx;
-											}}
-										>
-											<div>
-												<div
-													class=" font-medium text-black dark:text-gray-100 flex items-center gap-1"
-												>
-													<div
-														class="bg-gray-500/20 text-gray-700 dark:text-gray-200 rounded-sm uppercase text-xs font-bold px-1 shrink-0"
-													>
-														File
-													</div>
-
-													<div class="line-clamp-1">
-														{file?.meta?.name}
-													</div>
-												</div>
-
-												<div class=" text-xs text-gray-600 dark:text-gray-100 line-clamp-1">
-													{$i18n.t('Updated')}
-													{dayjs(file.updated_at * 1000).fromNow()}
-												</div>
-											</div>
-										</button>
-									{/each}
-								{:else}
-									<div class=" text-gray-500 text-xs mt-1 mb-2">
-										{$i18n.t('No files found.')}
-									</div>
-								{/if}
-							</div> -->
-					{/each}
-
-					{#if prompt
-						.split(' ')
-						.some((s) => s.substring(1).startsWith('https://www.youtube.com') || s
-									.substring(1)
-									.startsWith('https://youtu.be'))}
-						<button
-							class="px-3 py-1.5 rounded-xl w-full text-left bg-gray-50 dark:bg-gray-850 dark:text-gray-100 selected-command-option-button"
-							type="button"
-							on:click={() => {
-								const url = prompt.split(' ')?.at(0)?.substring(1);
-								if (isValidHttpUrl(url)) {
-									confirmSelectYoutube(url);
-								} else {
-									toast.error(
-										$i18n.t(
-											'Oops! Looks like the URL is invalid. Please double-check and try again.'
-										)
-									);
-								}
-							}}
-						>
-							<div class=" font-medium text-black dark:text-gray-100 line-clamp-1">
-								{prompt.split(' ')?.at(0)?.substring(1)}
-							</div>
-
-							<div class=" text-xs text-gray-600 line-clamp-1">{$i18n.t('Youtube')}</div>
-						</button>
-					{:else if prompt.split(' ')?.at(0)?.substring(1).startsWith('http')}
-						<button
-							class="px-3 py-1.5 rounded-xl w-full text-left bg-gray-50 dark:bg-gray-850 dark:text-gray-100 selected-command-option-button"
-							type="button"
-							on:click={() => {
-								const url = prompt.split(' ')?.at(0)?.substring(1);
-								if (isValidHttpUrl(url)) {
-									confirmSelectWeb(url);
-								} else {
-									toast.error(
-										$i18n.t(
-											'Oops! Looks like the URL is invalid. Please double-check and try again.'
-										)
-									);
-								}
-							}}
-						>
-							<div class=" font-medium text-black dark:text-gray-100 line-clamp-1">
-								{prompt.split(' ')?.at(0)?.substring(1)}
-							</div>
-
-							<div class=" text-xs text-gray-600 line-clamp-1">{$i18n.t('Web')}</div>
-						</button>
-					{/if}
-				</div>
+{#if filteredItems.length > 0 || query.startsWith('http')}
+	{#each filteredItems as item, idx}
+		{#if idx === 0 || item?.type !== filteredItems[idx - 1]?.type}
+			<div class="px-2 text-xs text-gray-500 py-1">
+				{#if item?.type === 'folder'}
+					{$i18n.t('Folders')}
+				{:else if item?.type === 'collection'}
+					{$i18n.t('Collections')}
+				{:else if item?.type === 'file'}
+					{$i18n.t('Files')}
+				{:else if item?.type === 'note'}
+					{$i18n.t('Notes')}
+				{/if}
 			</div>
-		</div>
-	</div>
+		{/if}
+
+		{#if !['youtube', 'web'].includes(item.type)}
+			<button
+				class="px-2 py-1 rounded-xl w-full text-left flex justify-between items-center {idx ===
+				selectedIdx
+					? 'bg-gray-50 dark:bg-gray-800 dark:text-gray-100 selected-command-option-button'
+					: ''}"
+				type="button"
+				data-selected={idx === selectedIdx}
+				on:click={() => void selectKnowledgeItem(item)}
+				on:mousemove={() => {
+					selectedIdx = idx;
+				}}
+			>
+				<div class="text-black dark:text-gray-100 flex items-center gap-1">
+					<Tooltip
+						content={item?.type === 'file'
+							? `${item?.collection?.name ?? ''} > ${$i18n.t('File')}`
+							: item?.type === 'collection'
+								? $i18n.t('Collection')
+								: item?.type === 'note'
+									? $i18n.t('Note')
+									: $i18n.t('Folder')}
+						placement="top"
+					>
+						{#if item?.type === 'collection'}
+							<Database className="size-4" />
+						{:else if item?.type === 'folder'}
+							<Folder className="size-4" />
+						{:else if item?.type === 'note'}
+							<Bookmark className="size-4" />
+						{:else}
+							<DocumentPage className="size-4" />
+						{/if}
+					</Tooltip>
+
+					<Tooltip content={decodeString(item?.name)} placement="top-start">
+						<div class="line-clamp-1 flex-1">{decodeString(item?.name)}</div>
+					</Tooltip>
+				</div>
+			</button>
+		{/if}
+	{/each}
+
+	{#if isYoutubeUrl(query)}
+		<button
+			class="px-2 py-1 rounded-xl w-full text-left bg-gray-50 dark:bg-gray-800 dark:text-gray-100 selected-command-option-button"
+			type="button"
+			data-selected={selectedIdx === filteredItems.findIndex((item) => item.type === 'youtube')}
+			on:click={() => {
+				if (isValidHttpUrl(query)) {
+					onSelect({ type: 'web', data: query });
+				} else {
+					toast.error(
+						$i18n.t('Oops! Looks like the URL is invalid. Please double-check and try again.')
+					);
+				}
+			}}
+		>
+			<div class="text-black dark:text-gray-100 line-clamp-1 flex items-center gap-1">
+				<Tooltip content={$i18n.t('YouTube')} placement="top">
+					<Youtube className="size-4" />
+				</Tooltip>
+				<div class="truncate flex-1">{query}</div>
+			</div>
+		</button>
+	{:else if query.startsWith('http')}
+		<button
+			class="px-2 py-1 rounded-xl w-full text-left bg-gray-50 dark:bg-gray-800 dark:text-gray-100 selected-command-option-button"
+			type="button"
+			data-selected={selectedIdx === filteredItems.findIndex((item) => item.type === 'web')}
+			on:click={() => {
+				if (isValidHttpUrl(query)) {
+					onSelect({ type: 'web', data: query });
+				} else {
+					toast.error(
+						$i18n.t('Oops! Looks like the URL is invalid. Please double-check and try again.')
+					);
+				}
+			}}
+		>
+			<div class="text-black dark:text-gray-100 line-clamp-1 flex items-center gap-1">
+				<Tooltip content={$i18n.t('Web')} placement="top">
+					<GlobeAlt className="size-4" />
+				</Tooltip>
+				<div class="truncate flex-1">{query}</div>
+			</div>
+		</button>
+	{/if}
 {/if}

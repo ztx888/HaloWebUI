@@ -1,306 +1,147 @@
 <script lang="ts">
-	import { prompts, settings, user } from '$lib/stores';
-	import {
-		extractCurlyBraceWords,
-		getUserPosition,
-		getFormattedDate,
-		getFormattedTime,
-		getCurrentDateTime,
-		getUserTimezone,
-		getWeekday
-	} from '$lib/utils';
-	import { tick, getContext } from 'svelte';
-	import { toast } from 'svelte-sonner';
-	import PromptVariableModal from './PromptVariableModal.svelte';
+	import Tooltip from '$lib/components/common/Tooltip.svelte';
+	import { getPrompts } from '$lib/apis/prompts';
+	import { config } from '$lib/stores';
+	import { getContext, onDestroy } from 'svelte';
 
 	const i18n = getContext('i18n');
 
-	export let files;
-
-	export let prompt = '';
-	export let command = '';
+	export let query = '';
+	export let onSelect = (_event) => {};
+	export let filteredItems = [];
 
 	let selectedPromptIdx = 0;
-	let filteredPrompts = [];
+	let items = [];
+	let defaultSuggestionItems = [];
+	let visibleItems = [];
+	let searchDebounceTimer: ReturnType<typeof setTimeout>;
 
-	let showVariableModal = false;
-	let pendingCommand = null;
-	let pendingVariables = [];
+	const normalizeDefaultPromptSuggestion = (item, index) => {
+		const title = Array.isArray(item?.title)
+			? item.title
+			: item?.title
+				? [item.title, '']
+				: ['', ''];
 
-	const BUILTIN_VARS = [
-		'CLIPBOARD',
-		'USER_LOCATION',
-		'USER_NAME',
-		'USER_LANGUAGE',
-		'CURRENT_DATE',
-		'CURRENT_TIME',
-		'CURRENT_DATETIME',
-		'CURRENT_TIMEZONE',
-		'CURRENT_WEEKDAY'
-	];
+		return {
+			id: item?.id ?? `default-prompt-suggestion-${index}`,
+			command: '',
+			name: title.filter(Boolean).join(' · ') || $i18n.t('Prompt suggestion'),
+			title,
+			content: item?.content ?? '',
+			isDefaultSuggestion: true
+		};
+	};
 
-	$: filteredPrompts = $prompts
-		.filter((p) => p.command.toLowerCase().includes(command.toLowerCase()))
+	$: defaultSuggestionItems = ($config?.default_prompt_suggestions ?? []).map((item, index) =>
+		normalizeDefaultPromptSuggestion(item, index)
+	);
+
+	$: visibleItems = items.length > 0 ? items : defaultSuggestionItems;
+
+	$: if (query !== undefined) {
+		clearTimeout(searchDebounceTimer);
+		searchDebounceTimer = setTimeout(() => {
+			getItems();
+		}, 200);
+	}
+
+	onDestroy(() => {
+		clearTimeout(searchDebounceTimer);
+	});
+
+	$: filteredItems = visibleItems
+		.filter((item) => {
+			const lowerQuery = query.toLowerCase();
+			if (item.isDefaultSuggestion) {
+				return (
+					(item?.content ?? '').toLowerCase().includes(lowerQuery) ||
+					(item?.title ?? []).join(' ').toLowerCase().includes(lowerQuery) ||
+					(item?.name ?? '').toLowerCase().includes(lowerQuery)
+				);
+			}
+
+			return (
+				(item?.command ?? '').toLowerCase().includes(lowerQuery) ||
+				(item?.name ?? '').toLowerCase().includes(lowerQuery) ||
+				(item?.content ?? '').toLowerCase().includes(lowerQuery)
+			);
+		})
 		.sort((a, b) => (a.name || a.command || '').localeCompare(b.name || b.command || ''));
 
-	$: if (command) {
+	$: if (query) {
 		selectedPromptIdx = 0;
 	}
+
+	const getItems = async () => {
+		const res = await getPrompts(localStorage.token).catch(() => null);
+		if (res) {
+			items = res.filter((item) => item.is_active !== false);
+		}
+	};
 
 	export const selectUp = () => {
 		selectedPromptIdx = Math.max(0, selectedPromptIdx - 1);
 	};
 
 	export const selectDown = () => {
-		selectedPromptIdx = Math.min(selectedPromptIdx + 1, filteredPrompts.length - 1);
+		selectedPromptIdx = Math.min(selectedPromptIdx + 1, filteredItems.length - 1);
 	};
 
-	const confirmPrompt = async (command) => {
-		let text = await resolveBuiltinVars(command.content);
-
-		// Check for remaining custom variables
-		const remaining = extractCurlyBraceWords(text);
-		const customVars = remaining.filter((v) => !BUILTIN_VARS.includes(v.word));
-
-		if (customVars.length > 0) {
-			pendingCommand = command;
-			pendingVariables = customVars;
-			showVariableModal = true;
-			return;
-		}
-
-		insertText(text);
-	};
-
-	const handleVariablesConfirm = (values) => {
-		if (!pendingCommand) return;
-
-		let text = pendingCommand.content;
-
-		// Re-resolve builtin vars synchronously (they were already resolved before)
-		// For simplicity, resolve them again
-		resolveBuiltinVars(text).then((resolved) => {
-			// Apply user-provided variable values
-			for (const [key, val] of Object.entries(values)) {
-				resolved = resolved.replaceAll(`{{${key}}}`, val || '');
-			}
-			insertText(resolved);
-			pendingCommand = null;
-			pendingVariables = [];
-		});
-	};
-
-	const resolveBuiltinVars = async (content) => {
-		let text = content;
-
-		if (content.includes('{{CLIPBOARD}}')) {
-			const clipboardText = await navigator.clipboard.readText().catch((err) => {
-				toast.error($i18n.t('Failed to read clipboard contents'));
-				return '{{CLIPBOARD}}';
-			});
-
-			const clipboardItems = await navigator.clipboard.read();
-
-			let imageUrl = null;
-			for (const item of clipboardItems) {
-				for (const type of item.types) {
-					if (type.startsWith('image/')) {
-						const blob = await item.getType(type);
-						imageUrl = URL.createObjectURL(blob);
-					}
-				}
-			}
-
-			if (imageUrl) {
-				files = [
-					...files,
-					{
-						type: 'image',
-						url: imageUrl
-					}
-				];
-			}
-
-			text = text.replaceAll('{{CLIPBOARD}}', clipboardText);
-		}
-
-		if (content.includes('{{USER_LOCATION}}')) {
-			let location;
-			try {
-				location = await getUserPosition();
-			} catch (error) {
-				toast.error($i18n.t('Location access not allowed'));
-				location = 'LOCATION_UNKNOWN';
-			}
-			text = text.replaceAll('{{USER_LOCATION}}', String(location));
-		}
-
-		if (content.includes('{{USER_NAME}}')) {
-			const name = $user?.name || 'User';
-			text = text.replaceAll('{{USER_NAME}}', name);
-		}
-
-		if (content.includes('{{USER_LANGUAGE}}')) {
-			const language = localStorage.getItem('locale') || 'en-US';
-			text = text.replaceAll('{{USER_LANGUAGE}}', language);
-		}
-
-		if (content.includes('{{CURRENT_DATE}}')) {
-			text = text.replaceAll('{{CURRENT_DATE}}', getFormattedDate());
-		}
-
-		if (content.includes('{{CURRENT_TIME}}')) {
-			text = text.replaceAll('{{CURRENT_TIME}}', getFormattedTime());
-		}
-
-		if (content.includes('{{CURRENT_DATETIME}}')) {
-			text = text.replaceAll('{{CURRENT_DATETIME}}', getCurrentDateTime());
-		}
-
-		if (content.includes('{{CURRENT_TIMEZONE}}')) {
-			text = text.replaceAll('{{CURRENT_TIMEZONE}}', getUserTimezone());
-		}
-
-		if (content.includes('{{CURRENT_WEEKDAY}}')) {
-			text = text.replaceAll('{{CURRENT_WEEKDAY}}', getWeekday());
-		}
-
-		return text;
-	};
-
-	const insertText = async (text) => {
-		const lines = prompt.split('\n');
-		const lastLine = lines.pop();
-
-		const lastLineWords = lastLine.split(' ');
-		lastLineWords.pop();
-
-		const escapeMarkdownSyntax = (value: string) =>
-			value.replace(/([\\`*_{}\[\]()#+\-.!|>~])/g, '\\$1');
-
-		if ($settings?.richTextInput ?? true) {
-			const normalizedText =
-				($settings?.insertPromptAsRichText ?? false) ? text : escapeMarkdownSyntax(text);
-
-			lastLineWords.push(
-				`${normalizedText.replace(/</g, '&lt;').replace(/>/g, '&gt;').replaceAll('\n', '<br/>')}`
-			);
-
-			lines.push(lastLineWords.join(' '));
-			prompt = lines.join('<br/>');
-		} else {
-			lastLineWords.push(text);
-			lines.push(lastLineWords.join(' '));
-			prompt = lines.join('\n');
-		}
-
-		const chatInputContainerElement = document.getElementById('chat-input-container');
-		const chatInputElement = document.getElementById('chat-input');
-
-		await tick();
-		if (chatInputContainerElement) {
-			chatInputContainerElement.scrollTop = chatInputContainerElement.scrollHeight;
-		}
-
-		await tick();
-		if (chatInputElement) {
-			chatInputElement.focus();
-			chatInputElement.dispatchEvent(new Event('input'));
-
-			const words = extractCurlyBraceWords(prompt);
-
-			if (words.length > 0) {
-				const word = words.at(0);
-				const fullPrompt = prompt;
-
-				prompt = prompt.substring(0, word?.endIndex + 1);
-				await tick();
-
-				chatInputElement.scrollTop = chatInputElement.scrollHeight;
-
-				prompt = fullPrompt;
-				await tick();
-
-				chatInputElement.setSelectionRange(word?.startIndex, word.endIndex + 1);
-			} else {
-				chatInputElement.scrollTop = chatInputElement.scrollHeight;
-			}
+	export const select = () => {
+		const command = filteredItems[selectedPromptIdx];
+		if (command) {
+			onSelect({ type: 'prompt', data: command });
 		}
 	};
 </script>
 
-<PromptVariableModal
-	bind:show={showVariableModal}
-	variables={pendingVariables}
-	on:confirm={(e) => handleVariablesConfirm(e.detail)}
-	on:cancel={() => {
-		pendingCommand = null;
-		pendingVariables = [];
-	}}
-/>
+<div class="px-2 text-xs text-gray-500 py-1">
+	{items.length > 0 ? $i18n.t('Prompts') : $i18n.t('Prompt suggestions')}
+</div>
 
-{#if filteredPrompts.length > 0}
-	<div
-		id="commands-container"
-		class="px-2 mb-2 text-left w-full absolute bottom-0 left-0 right-0 z-10"
-	>
-		<div class="flex w-full rounded-xl border border-gray-100 dark:border-gray-850">
-			<div
-				class="max-h-60 flex flex-col w-full rounded-xl bg-white dark:bg-gray-900 dark:text-gray-100"
-			>
-				<div class="m-1 overflow-y-auto p-1 space-y-0.5 scrollbar-hidden">
-					{#each filteredPrompts as prompt, promptIdx}
-						<button
-							class=" px-3 py-1.5 rounded-xl w-full text-left {promptIdx === selectedPromptIdx
-								? '  bg-gray-50 dark:bg-gray-850 selected-command-option-button'
-								: ''}"
-							type="button"
-							on:click={() => {
-								confirmPrompt(prompt);
-							}}
-							on:mousemove={() => {
-								selectedPromptIdx = promptIdx;
-							}}
-							on:focus={() => {}}
-						>
-							<div class=" font-medium text-black dark:text-gray-100">
-								{prompt.command}
-							</div>
-
-							<div class=" text-xs text-gray-600 dark:text-gray-100">
-								{prompt.name || prompt.command}
-							</div>
-						</button>
-					{/each}
-				</div>
-
-				<div
-					class=" px-2 pt-0.5 pb-1 text-xs text-gray-600 dark:text-gray-100 bg-white dark:bg-gray-900 rounded-b-xl flex items-center space-x-1"
+{#if filteredItems.length > 0}
+	<div class="space-y-0.5 scrollbar-hidden">
+		{#each filteredItems as promptItem, promptIdx}
+			<Tooltip content={promptItem.name} placement="top-start">
+				<button
+					class="px-3 py-1 rounded-xl w-full text-left {promptIdx === selectedPromptIdx
+						? 'bg-gray-50 dark:bg-gray-800 selected-command-option-button'
+						: ''} truncate"
+					type="button"
+					on:click={() => {
+						onSelect({ type: 'prompt', data: promptItem });
+					}}
+					on:mousemove={() => {
+						selectedPromptIdx = promptIdx;
+					}}
+					data-selected={promptIdx === selectedPromptIdx}
 				>
-					<div>
-						<svg
-							xmlns="http://www.w3.org/2000/svg"
-							fill="none"
-							viewBox="0 0 24 24"
-							stroke-width="1.5"
-							stroke="currentColor"
-							class="w-3 h-3"
-						>
-							<path
-								stroke-linecap="round"
-								stroke-linejoin="round"
-								d="m11.25 11.25.041-.02a.75.75 0 0 1 1.063.852l-.708 2.836a.75.75 0 0 0 1.063.853l.041-.021M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9-3.75h.008v.008H12V8.25Z"
-							/>
-						</svg>
-					</div>
-
-					<div class="line-clamp-1">
-						{$i18n.t(
-							'Tip: Update multiple variable slots consecutively by pressing the tab key in the chat input after each replacement.'
-						)}
-					</div>
-				</div>
-			</div>
-		</div>
+					{#if promptItem.isDefaultSuggestion}
+						<div class="min-w-0">
+							<div class="font-medium text-black dark:text-gray-100 line-clamp-1">
+								{promptItem.title?.[0] || promptItem.name}
+							</div>
+							<div class="text-xs text-gray-600 dark:text-gray-100 line-clamp-1">
+								{promptItem.title?.[1] || promptItem.content}
+							</div>
+						</div>
+					{:else}
+						<span class="font-medium text-black dark:text-gray-100">{promptItem.command}</span>
+						<span class="text-xs text-gray-600 dark:text-gray-100"> {promptItem.name}</span>
+					{/if}
+				</button>
+			</Tooltip>
+		{/each}
+	</div>
+{:else}
+	<div class="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">
+		{#if items.length === 0 && defaultSuggestionItems.length === 0}
+			{$i18n.t('No prompt suggestions available yet.')}
+		{:else if items.length === 0}
+			{$i18n.t('No matching prompt suggestions.')}
+		{:else}
+			{$i18n.t('No matching prompts.')}
+		{/if}
 	</div>
 {/if}

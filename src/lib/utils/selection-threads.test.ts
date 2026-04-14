@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
 	buildSelectionThreadPrompt,
+	createSelectionThread,
 	findSelectionAnchorOffsets,
+	interruptSelectionThread,
 	materializeSelectionThreadMessages,
 	normalizeSelectionThreads,
 	type SelectionThread
@@ -97,5 +99,97 @@ describe('selection thread helpers', () => {
 				content: '再举个例子'
 			}
 		]);
+	});
+
+	it('converts persisted streaming turns into interrupted turns when restoring', () => {
+		const restored = normalizeSelectionThreads(
+			{
+				version: 1,
+				items: [
+					{
+						id: 'thread-1',
+						sourceMessageId: 'message-1',
+						sourceMessageHash: 'hash',
+						anchor: {
+							start: 0,
+							end: 4,
+							exact: 'Beta',
+							prefix: 'Alpha ',
+							suffix: ' Gamma'
+						},
+						quote: 'Beta',
+						pinned: false,
+						draft: '草稿还在',
+						turns: [
+							{
+								id: 'assistant-1',
+								role: 'assistant',
+								content: '回答到一半',
+								state: 'streaming'
+							}
+						],
+						createdAt: 1,
+						updatedAt: 2
+					}
+				]
+			},
+			{ coerceStreamingToInterrupted: true }
+		);
+
+		expect(restored.items[0]?.draft).toBe('草稿还在');
+		expect(restored.items[0]?.turns[0]).toMatchObject({
+			role: 'assistant',
+			content: '回答到一半',
+			state: 'interrupted'
+		});
+	});
+
+	it('interrupts only streaming assistant turns and preserves other thread state', () => {
+		const thread = createSelectionThread({
+			id: 'thread-1',
+			sourceMessageId: 'message-1',
+			sourceMessageHash: 'hash',
+			anchor: {
+				start: 0,
+				end: 4,
+				exact: 'Beta',
+				prefix: 'Alpha ',
+				suffix: ' Gamma'
+			},
+			quote: 'Beta',
+			pinned: true,
+			draft: '继续问这个',
+			turns: [
+				{
+					id: 'user-1',
+					role: 'user',
+					displayContent: '先解释一下',
+					requestContent: '> Beta\n\n先解释一下'
+				},
+				{
+					id: 'assistant-1',
+					role: 'assistant',
+					content: '正在回答',
+					state: 'streaming'
+				}
+			],
+			createdAt: 1,
+			updatedAt: 2
+		});
+
+		const interrupted = interruptSelectionThread(thread);
+
+		expect(interrupted.pinned).toBe(true);
+		expect(interrupted.draft).toBe('继续问这个');
+		expect(interrupted.turns[0]).toMatchObject({
+			role: 'user',
+			displayContent: '先解释一下'
+		});
+		expect(interrupted.turns[1]).toMatchObject({
+			role: 'assistant',
+			content: '正在回答',
+			state: 'interrupted'
+		});
+		expect(interrupted.updatedAt).toBeGreaterThanOrEqual(thread.updatedAt);
 	});
 });

@@ -208,6 +208,7 @@
 	const selectionThreadsStore = writable<PersistedSelectionThreads>(selectionThreads);
 	const expandedSelectionThreadId = writable<string | null>(null);
 	let selectionThreadsPersistTimeout: ReturnType<typeof setTimeout> | null = null;
+	let pendingChatSave: Promise<void> = Promise.resolve();
 
 	// J-3-01: O(1) model lookup map — rebuilt reactively when $models changes
 	let modelsMap: Map<string, Model> = new Map();
@@ -258,15 +259,15 @@
 	$: hasMessages = history.currentId !== null;
 	$: {
 		const messageIds = new Set(Object.keys(history?.messages ?? {}));
-		const filteredItems = selectionThreads.items.filter((thread) =>
+		const nextItems = selectionThreads.items.filter((thread) =>
 			messageIds.has(thread.sourceMessageId)
 		);
 
-		if (filteredItems.length !== selectionThreads.items.length) {
+		if (nextItems.length !== selectionThreads.items.length) {
 			updateSelectionThreads(
 				{
 					version: 1,
-					items: filteredItems
+					items: nextItems
 				},
 				{ immediate: true }
 			);
@@ -882,6 +883,16 @@
 		selectionThreadsStore.set(selectionThreads);
 	};
 
+	const normalizeSelectionThreadsForRuntime = (nextState: PersistedSelectionThreads) =>
+		normalizeSelectionThreads(nextState, {
+			coerceStreamingToInterrupted: true
+		});
+
+	const setRuntimeSelectionThreadsState = (nextState: PersistedSelectionThreads) => {
+		selectionThreads = normalizeSelectionThreadsForRuntime(nextState);
+		selectionThreadsStore.set(selectionThreads);
+	};
+
 	const persistSelectionThreads = async () => {
 		if (selectionThreadsPersistTimeout) {
 			clearTimeout(selectionThreadsPersistTimeout);
@@ -892,7 +903,9 @@
 			return;
 		}
 
-		await saveChatHandler($chatId, history);
+		await saveChatHandler($chatId, history, {
+			selectionThreads
+		});
 	};
 
 	const scheduleSelectionThreadsPersist = (delay = 250) => {
@@ -945,14 +958,18 @@
 		persistSelectionThreads
 	});
 
-	const buildPersistedChatData = (historyState, messages = createMessagesList(historyState, historyState.currentId)) => ({
+	const buildPersistedChatData = (
+		historyState,
+		messages = createMessagesList(historyState, historyState.currentId),
+		persistedSelectionThreads: PersistedSelectionThreads = selectionThreads
+	) => ({
 		models: selectedModels,
 		history: historyState,
 		messages,
 		params,
 		files: chatFiles,
 		assistant: activeAssistant ?? undefined,
-		selectionThreads
+		selectionThreads: persistedSelectionThreads
 	});
 
 	$: {
@@ -2017,7 +2034,7 @@
 				params = chatContent?.params ?? {};
 				activeAssistant = toChatAssistantSnapshot(chatContent?.assistant ?? null);
 				chatFiles = chatContent?.files ?? [];
-				setSelectionThreadsState(normalizeSelectionThreads(chatContent?.selectionThreads));
+				setRuntimeSelectionThreadsState(normalizeSelectionThreads(chatContent?.selectionThreads));
 				expandedSelectionThreadId.set(null);
 
 				if (chat.assistant_id) {
@@ -2457,14 +2474,9 @@
 
 		if ($chatId == chatId) {
 			if (!$temporaryChatEnabled) {
-				chat = await updateChatById(
-					localStorage.token,
-					chatId,
-					buildPersistedChatData(history, messages)
-				);
-
-				currentChatPage.set(1);
-				await chats.set(await getChatList(localStorage.token, $currentChatPage));
+				await saveChatHandler(chatId, history, {
+					messages
+				});
 			}
 		}
 
@@ -2526,14 +2538,9 @@
 
 		if ($chatId == chatId) {
 			if (!$temporaryChatEnabled) {
-				chat = await updateChatById(
-					localStorage.token,
-					chatId,
-					buildPersistedChatData(history, messages)
-				);
-
-				currentChatPage.set(1);
-				await chats.set(await getChatList(localStorage.token, $currentChatPage));
+				await saveChatHandler(chatId, history, {
+					messages
+				});
 			}
 		}
 	};
@@ -3878,12 +3885,30 @@
 		return _chatId;
 	};
 
-	const saveChatHandler = async (_chatId, history) => {
+	const saveChatHandler = async (
+		_chatId,
+		history,
+		options: { selectionThreads?: PersistedSelectionThreads; messages?: any[] } = {}
+	) => {
 		if ($chatId == _chatId) {
 			if (!$temporaryChatEnabled) {
-				chat = await updateChatById(localStorage.token, _chatId, buildPersistedChatData(history));
-				currentChatPage.set(1);
-				await chats.set(await getChatList(localStorage.token, $currentChatPage));
+				const persistedSelectionThreads = options.selectionThreads ?? selectionThreads;
+				const persistedMessages = options.messages;
+				const payload = buildPersistedChatData(
+					history,
+					persistedMessages ?? createMessagesList(history, history.currentId),
+					persistedSelectionThreads
+				);
+
+				pendingChatSave = pendingChatSave
+					.catch(() => undefined)
+					.then(async () => {
+						chat = await updateChatById(localStorage.token, _chatId, payload);
+						currentChatPage.set(1);
+						await chats.set(await getChatList(localStorage.token, $currentChatPage));
+					});
+
+				await pendingChatSave;
 			}
 		}
 	};

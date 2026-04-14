@@ -55,6 +55,85 @@ export const createEmptySelectionThreads = (): PersistedSelectionThreads => ({
 
 export const hashSelectionThreadSource = (value: string) => sha256(value ?? '');
 
+export const sameSelectionThreadAnchor = (
+	left: SelectionThreadAnchor,
+	right: SelectionThreadAnchor
+): boolean =>
+	left.start === right.start &&
+	left.end === right.end &&
+	left.exact === right.exact &&
+	left.prefix === right.prefix &&
+	left.suffix === right.suffix;
+
+export const sortSelectionThreads = (threads: SelectionThread[]) =>
+	[...(threads ?? [])].sort((left, right) => left.createdAt - right.createdAt);
+
+export const createSelectionThread = ({
+	id,
+	sourceMessageId,
+	sourceMessageHash,
+	anchor,
+	quote,
+	actionId,
+	pinned = false,
+	draft = '',
+	turns = [],
+	addedToConversationAt,
+	createdAt = Date.now(),
+	updatedAt = createdAt
+}: {
+	id: string;
+	sourceMessageId: string;
+	sourceMessageHash: string;
+	anchor: SelectionThreadAnchor;
+	quote: string;
+	actionId?: string;
+	pinned?: boolean;
+	draft?: string;
+	turns?: SelectionThreadTurn[];
+	addedToConversationAt?: number;
+	createdAt?: number;
+	updatedAt?: number;
+}): SelectionThread => ({
+	id,
+	sourceMessageId,
+	sourceMessageHash,
+	anchor,
+	quote,
+	pinned,
+	draft,
+	turns,
+	...(typeof addedToConversationAt === 'number' ? { addedToConversationAt } : {}),
+	createdAt,
+	updatedAt,
+	...(typeof actionId === 'string' && actionId ? { actionId } : {})
+});
+
+export const interruptSelectionThread = (thread: SelectionThread): SelectionThread => {
+	let hasInterruptedTurn = false;
+	const turns = thread.turns.map((turn) => {
+		if (turn.role !== 'assistant' || turn.state !== 'streaming') {
+			return turn;
+		}
+
+		hasInterruptedTurn = true;
+		return {
+			...turn,
+			state: 'interrupted' as const
+		};
+	});
+
+	if (!hasInterruptedTurn) {
+		return thread;
+	}
+
+	return {
+		...thread,
+		turns,
+		updatedAt: Date.now()
+	};
+};
+
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
 	typeof value === 'object' && value !== null && !Array.isArray(value);
 
@@ -80,7 +159,16 @@ const normalizeAnchor = (value: unknown): SelectionThreadAnchor | null => {
 	};
 };
 
-const normalizeTurn = (value: unknown): SelectionThreadTurn | null => {
+type NormalizeSelectionThreadsOptions = {
+	coerceStreamingToInterrupted?: boolean;
+};
+
+const normalizeTurn = (
+	value: unknown,
+	options: NormalizeSelectionThreadsOptions = {}
+): SelectionThreadTurn | null => {
+	const { coerceStreamingToInterrupted = false } = options;
+
 	if (!isPlainObject(value) || typeof value.id !== 'string') {
 		return null;
 	}
@@ -108,13 +196,17 @@ const normalizeTurn = (value: unknown): SelectionThreadTurn | null => {
 	}
 
 	if (value.role === 'assistant') {
-		const state =
+		const normalizedState =
 			value.state === 'streaming' ||
 			value.state === 'done' ||
 			value.state === 'error' ||
 			value.state === 'interrupted'
 				? value.state
 				: 'done';
+		const state =
+			coerceStreamingToInterrupted && normalizedState === 'streaming'
+				? 'interrupted'
+				: normalizedState;
 
 		return {
 			id: value.id,
@@ -128,7 +220,10 @@ const normalizeTurn = (value: unknown): SelectionThreadTurn | null => {
 	return null;
 };
 
-const normalizeThread = (value: unknown): SelectionThread | null => {
+const normalizeThread = (
+	value: unknown,
+	options: NormalizeSelectionThreadsOptions = {}
+): SelectionThread | null => {
 	if (!isPlainObject(value)) {
 		return null;
 	}
@@ -146,11 +241,11 @@ const normalizeThread = (value: unknown): SelectionThread | null => {
 
 	const turns = Array.isArray(value.turns)
 		? value.turns
-				.map((turn) => normalizeTurn(turn))
+				.map((turn) => normalizeTurn(turn, options))
 				.filter((turn): turn is SelectionThreadTurn => turn !== null)
 		: [];
 
-	return {
+	return createSelectionThread({
 		id: value.id,
 		sourceMessageId: value.sourceMessageId,
 		sourceMessageHash: value.sourceMessageHash,
@@ -159,9 +254,8 @@ const normalizeThread = (value: unknown): SelectionThread | null => {
 		pinned: Boolean(value.pinned),
 		draft: typeof value.draft === 'string' ? value.draft : '',
 		turns,
-		...(typeof value.addedToConversationAt === 'number'
-			? { addedToConversationAt: value.addedToConversationAt }
-			: {}),
+		addedToConversationAt:
+			typeof value.addedToConversationAt === 'number' ? value.addedToConversationAt : undefined,
 		createdAt:
 			typeof value.createdAt === 'number' && Number.isFinite(value.createdAt)
 				? value.createdAt
@@ -170,20 +264,25 @@ const normalizeThread = (value: unknown): SelectionThread | null => {
 			typeof value.updatedAt === 'number' && Number.isFinite(value.updatedAt)
 				? value.updatedAt
 				: Date.now(),
-		...(typeof value.actionId === 'string' && value.actionId ? { actionId: value.actionId } : {})
-	};
+		actionId: typeof value.actionId === 'string' && value.actionId ? value.actionId : undefined
+	});
 };
 
-export const normalizeSelectionThreads = (value: unknown): PersistedSelectionThreads => {
+export const normalizeSelectionThreads = (
+	value: unknown,
+	options: NormalizeSelectionThreadsOptions = {}
+): PersistedSelectionThreads => {
 	if (!isPlainObject(value) || !Array.isArray(value.items)) {
 		return createEmptySelectionThreads();
 	}
 
 	return {
 		version: SELECTION_THREADS_VERSION,
-		items: value.items
-			.map((item) => normalizeThread(item))
-			.filter((item): item is SelectionThread => item !== null)
+		items: sortSelectionThreads(
+			value.items
+				.map((item) => normalizeThread(item, options))
+				.filter((item): item is SelectionThread => item !== null)
+		)
 	};
 };
 
@@ -411,3 +510,4 @@ export const materializeSelectionThreadMessages = (thread: SelectionThread) =>
 			}
 		];
 	});
+

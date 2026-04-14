@@ -158,6 +158,35 @@ export const getUsers = async (token: string) => {
 	return res ? res : [];
 };
 
+export const searchUsers = async (token: string, query: string = '') => {
+	let error = null;
+
+	const params = new URLSearchParams();
+	if (query) {
+		params.set('query', query);
+	}
+
+	const res = await fetch(`${WEBUI_API_BASE_URL}/users/search?${params.toString()}`, {
+		method: 'GET',
+		headers: {
+			'Content-Type': 'application/json',
+			Authorization: `Bearer ${token}`
+		}
+	})
+		.then(parseJsonResponse)
+		.catch((err) => {
+			console.log(err);
+			error = err.detail;
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res ?? { users: [] };
+};
+
 export const getUserSettings = async (token: string): Promise<UserSettingsPayload | null> => {
 	let error = null;
 	const res = await fetch(`${WEBUI_API_BASE_URL}/users/user/settings`, {

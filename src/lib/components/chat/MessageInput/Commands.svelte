@@ -1,131 +1,121 @@
-<script>
-	import { createEventDispatcher, onMount } from 'svelte';
-	import { toast } from 'svelte-sonner';
-
-	const dispatch = createEventDispatcher();
-
-	import { knowledge, prompts, skills } from '$lib/stores';
-
-	import { removeLastWordFromString } from '$lib/utils';
-	import { getPrompts } from '$lib/apis/prompts';
-	import { getKnowledgeBases } from '$lib/apis/knowledge';
-	import { getSkills } from '$lib/apis/skills';
-
+<script lang="ts">
+	import { createEventDispatcher } from 'svelte';
 	import Prompts from './Commands/Prompts.svelte';
 	import Knowledge from './Commands/Knowledge.svelte';
 	import Models from './Commands/Models.svelte';
 	import SkillsPanel from './Commands/Skills.svelte';
-	import Spinner from '$lib/components/common/Spinner.svelte';
+
+	const dispatch = createEventDispatcher();
 
 	export let prompt = '';
 	export let files = [];
+	export let insertTextHandler = async (_text: string) => {};
 
-	let loading = false;
 	let commandElement = null;
+	let query = '';
+	let triggerChar = '';
+	let show = false;
+
+	const replaceLastWord = (input: string, replacement: string) => {
+		const lines = input.split('\n');
+		const lastLine = lines.pop() ?? '';
+		const words = lastLine.split(' ');
+		words.pop();
+		if (replacement) {
+			words.push(replacement);
+		}
+		lines.push(words.join(' '));
+		return lines.join('\n');
+	};
+
+	const isKnowledgeCommand = (token: string) =>
+		(token?.charAt(0) === '#' && token.startsWith('#') && !token.includes('# ')) ||
+		('\\#' === token.slice(0, 2) && token.startsWith('#') && !token.includes('# '));
+
+	$: {
+		const token = prompt?.split('\n').pop()?.split(' ')?.pop() ?? '';
+		if (isKnowledgeCommand(token)) {
+			triggerChar = '#';
+			query = token.includes('\\#') ? token.slice(2) : token.slice(1);
+		} else {
+			triggerChar = token?.charAt(0) ?? '';
+			query = token.startsWith('/') || token.startsWith('@') || token.startsWith('$')
+				? token.slice(1)
+				: token;
+		}
+	}
+
+	$: show = ['/', '#', '@', '$'].includes(triggerChar);
 
 	export const selectUp = () => {
-		commandElement?.selectUp();
+		commandElement?.selectUp?.();
 	};
 
 	export const selectDown = () => {
-		commandElement?.selectDown();
-	};
-
-	let command = '';
-	$: command = prompt?.split('\n').pop()?.split(' ')?.pop() ?? '';
-
-	let show = false;
-	$: show = ['/', '#', '@', '$'].includes(command?.charAt(0)) || '\\#' === command.slice(0, 2);
-
-	$: if (show) {
-		init();
-	}
-
-	const init = async () => {
-		loading = true;
-		await Promise.all([
-			(async () => {
-				prompts.set(await getPrompts(localStorage.token));
-			})(),
-			(async () => {
-				knowledge.set(await getKnowledgeBases(localStorage.token));
-			})(),
-			(async () => {
-				skills.set((await getSkills(localStorage.token)) ?? []);
-			})()
-		]);
-		loading = false;
+		commandElement?.selectDown?.();
 	};
 </script>
 
 {#if show}
-	{#if !loading}
-		{#if command?.charAt(0) === '/'}
-			<Prompts bind:this={commandElement} bind:prompt bind:files {command} />
-		{:else if (command?.charAt(0) === '#' && command.startsWith('#') && !command.includes('# ')) || ('\\#' === command.slice(0, 2) && command.startsWith('#') && !command.includes('# '))}
-			<Knowledge
-				bind:this={commandElement}
-				bind:prompt
-				command={command.includes('\\#') ? command.slice(2) : command}
-				on:youtube={(e) => {
-					console.log(e);
-					dispatch('upload', {
-						type: 'youtube',
-						data: e.detail
-					});
-				}}
-				on:url={(e) => {
-					console.log(e);
-					dispatch('upload', {
-						type: 'web',
-						data: e.detail
-					});
-				}}
-				on:select={(e) => {
-					console.log(e);
-					if (files.find((f) => f.id === e.detail.id)) {
-						return;
-					}
-
-					files = [
-						...files,
-						{
-							...e.detail,
-							status: 'processed'
-						}
-					];
-
-					dispatch('select');
-				}}
-			/>
-		{:else if command?.charAt(0) === '@'}
-			<Models
-				bind:this={commandElement}
-				{command}
-				on:select={(e) => {
-					prompt = removeLastWordFromString(prompt, command);
-
-					dispatch('select', {
-						type: 'model',
-						data: e.detail
-					});
-				}}
-			/>
-		{:else if command?.charAt(0) === '$'}
-			<SkillsPanel bind:this={commandElement} bind:prompt {command} />
-		{/if}
-	{:else}
-		<div
-			id="commands-container"
-			class="px-2 mb-2 text-left w-full absolute bottom-0 left-0 right-0 z-10"
-		>
-			<div class="flex w-full rounded-xl border border-gray-100 dark:border-gray-850">
-				<div
-					class="max-h-60 flex flex-col w-full rounded-xl bg-white dark:bg-gray-900 dark:text-gray-100"
-				>
-					<Spinner />
+	<div id="commands-container" class="px-2 mb-2 text-left w-full absolute bottom-0 left-0 right-0 z-10">
+		<div class="flex w-full rounded-xl border border-gray-100 dark:border-gray-850">
+			<div class="max-h-60 flex flex-col w-full rounded-xl bg-white dark:bg-gray-900 dark:text-gray-100">
+				<div class="m-1 overflow-y-auto p-1 rounded-r-xl space-y-0.5 scrollbar-hidden">
+					{#if triggerChar === '/'}
+						<Prompts
+							bind:this={commandElement}
+							query={query}
+							onSelect={async (event) => {
+								const { type, data } = event;
+								if (type === 'prompt') {
+									await insertTextHandler(data.content);
+								}
+							}}
+						/>
+					{:else if triggerChar === '#'}
+						<Knowledge
+							bind:this={commandElement}
+							query={query}
+							onSelect={(event) => {
+								const { type, data } = event;
+								if (type === 'knowledge') {
+									if (!files.find((file) => file.id === data.id)) {
+										files = [...files, { ...data, status: 'processed' }];
+									}
+									prompt = replaceLastWord(prompt, '');
+									dispatch('select');
+								} else if (type === 'web') {
+									prompt = replaceLastWord(prompt, '');
+									dispatch('upload', { type: 'web', data });
+								}
+							}}
+						/>
+					{:else if triggerChar === '@'}
+						<Models
+							bind:this={commandElement}
+							query={query}
+							onSelect={(event) => {
+								const { type, data } = event;
+								if (type === 'model') {
+									prompt = replaceLastWord(prompt, '');
+									dispatch('select', { type: 'model', data });
+								}
+							}}
+						/>
+					{:else if triggerChar === '$'}
+						<SkillsPanel
+							bind:this={commandElement}
+							query={query}
+							onSelect={(event) => {
+								const { type, data } = event;
+								if (type === 'skill') {
+									prompt = replaceLastWord(prompt, `<$${data.id}|${data.name}> `);
+								}
+							}}
+						/>
+					{/if}
 				</div>
 			</div>
 		</div>
-	{/if}
+	</div>
 {/if}

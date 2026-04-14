@@ -18,7 +18,7 @@ class TestPrompts(AbstractPostgresTest):
                 self.create_url("/create"),
                 json={
                     "command": "/my-command",
-                    "title": "Hello World",
+                    "name": "Hello World",
                     "content": "description",
                 },
             )
@@ -27,8 +27,8 @@ class TestPrompts(AbstractPostgresTest):
             response = self.fast_api_client.post(
                 self.create_url("/create"),
                 json={
-                    "command": "/my-command2",
-                    "title": "Hello World 2",
+                    "command": "my-command2",
+                    "name": "Hello World 2",
                     "content": "description 2",
                 },
             )
@@ -45,8 +45,8 @@ class TestPrompts(AbstractPostgresTest):
             response = self.fast_api_client.get(self.create_url("/command/my-command"))
         assert response.status_code == 200
         data = response.json()
-        assert data["command"] == "/my-command"
-        assert data["title"] == "Hello World"
+        assert data["command"] == "my-command"
+        assert data["name"] == "Hello World"
         assert data["content"] == "description"
         assert data["user_id"] == "2"
 
@@ -55,15 +55,15 @@ class TestPrompts(AbstractPostgresTest):
             response = self.fast_api_client.post(
                 self.create_url("/command/my-command2/update"),
                 json={
-                    "command": "irrelevant for request",
-                    "title": "Hello World Updated",
+                    "command": "/my-command2",
+                    "name": "Hello World Updated",
                     "content": "description Updated",
                 },
             )
         assert response.status_code == 200
         data = response.json()
-        assert data["command"] == "/my-command2"
-        assert data["title"] == "Hello World Updated"
+        assert data["command"] == "my-command2"
+        assert data["name"] == "Hello World Updated"
         assert data["content"] == "description Updated"
         assert data["user_id"] == "3"
 
@@ -72,8 +72,8 @@ class TestPrompts(AbstractPostgresTest):
             response = self.fast_api_client.get(self.create_url("/command/my-command2"))
         assert response.status_code == 200
         data = response.json()
-        assert data["command"] == "/my-command2"
-        assert data["title"] == "Hello World Updated"
+        assert data["command"] == "my-command2"
+        assert data["name"] == "Hello World Updated"
         assert data["content"] == "description Updated"
         assert data["user_id"] == "3"
 

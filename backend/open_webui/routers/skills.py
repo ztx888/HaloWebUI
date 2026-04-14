@@ -3,7 +3,7 @@ import logging
 from typing import Any, Optional
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 from pydantic import BaseModel
 
 from open_webui.constants import ERROR_MESSAGES
@@ -165,6 +165,11 @@ class SkillUrlImportForm(BaseModel):
 
 class SkillGitHubImportForm(BaseModel):
     url: str
+
+
+class SkillListResponse(BaseModel):
+    items: list[SkillModel]
+    total: int
 
 
 def _filter_visible_skills(skills: list[SkillModel], user) -> list[SkillModel]:
@@ -491,6 +496,36 @@ async def _upsert_imported_skill(user, payload: ImportedSkillPayload) -> SkillIm
 @router.get("/", response_model=list[SkillModel])
 async def get_skills(request: Request, user=Depends(get_verified_user)):
     return _filter_visible_skills(Skills.get_skills(), user)
+
+
+@router.get("/list", response_model=SkillListResponse)
+async def get_skill_list(
+    query: Optional[str] = None,
+    view_option: Optional[str] = None,
+    page: int = Query(default=1, ge=1),
+    limit: int = Query(default=30, ge=1, le=100),
+    user=Depends(get_verified_user),
+):
+    items = _filter_visible_skills(Skills.get_skills(), user)
+
+    if view_option == "created":
+        items = [item for item in items if item.user_id == user.id]
+    elif view_option == "shared":
+        items = [item for item in items if item.user_id != user.id]
+
+    if query:
+        query_lower = query.strip().lower()
+        items = [
+            item
+            for item in items
+            if query_lower in (item.name or "").lower()
+            or query_lower in (item.description or "").lower()
+            or query_lower in (item.id or "").lower()
+        ]
+
+    total = len(items)
+    offset = (page - 1) * limit
+    return SkillListResponse(items=items[offset : offset + limit], total=total)
 
 
 ############################

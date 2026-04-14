@@ -10,7 +10,9 @@
 	import { mobile, settings } from '$lib/stores';
 	import {
 		buildSelectionThreadPrompt,
+		interruptSelectionThread,
 		materializeSelectionThreadMessages,
+		sameSelectionThreadAnchor,
 		type SelectionThread
 	} from '$lib/utils/selection-threads';
 	import Markdown from '../Messages/Markdown.svelte';
@@ -101,16 +103,6 @@
 
 	const requestControllers = new Map<string, AbortController>();
 
-	const sameAnchor = (
-		left: SelectionThread['anchor'],
-		right: SelectionThread['anchor']
-	): boolean =>
-		left.start === right.start &&
-		left.end === right.end &&
-		left.exact === right.exact &&
-		left.prefix === right.prefix &&
-		left.suffix === right.suffix;
-
 	const getActionById = (actionId?: string | null) =>
 		resolvedActions.find((action) => action.id === actionId) ??
 		resolvedActions.find((action) => action.input) ??
@@ -141,6 +133,56 @@
 		return null;
 	};
 
+	const getThreadMarkerTone = (thread: SelectionThread) => {
+		const lastAssistantTurn = getLastAssistantTurn(thread);
+
+		if (lastAssistantTurn?.role === 'assistant' && lastAssistantTurn.state === 'streaming') {
+			return 'running';
+		}
+
+		if (unreadThreadIds.includes(thread.id)) {
+			return 'new';
+		}
+
+		if (thread.pinned) {
+			return 'pinned';
+		}
+
+		return 'default';
+	};
+
+	const getThreadMarkerLabel = (thread: SelectionThread) => {
+		const tone = getThreadMarkerTone(thread);
+
+		if (tone === 'pinned') {
+			return $i18n.t('Pinned');
+		}
+
+		if (tone === 'running') {
+			return $i18n.t('Running');
+		}
+
+		return 'AI';
+	};
+
+	const getThreadStatusText = (thread: SelectionThread) => {
+		const lastAssistantTurn = getLastAssistantTurn(thread);
+
+		if (lastAssistantTurn?.role === 'assistant' && lastAssistantTurn.state === 'streaming') {
+			return $i18n.t('Running');
+		}
+
+		if (thread.pinned) {
+			return $i18n.t('Pinned');
+		}
+
+		if (thread.addedToConversationAt) {
+			return $i18n.t('Added to conversation');
+		}
+
+		return null;
+	};
+
 	const markThreadUnread = (threadId: string) => {
 		if (!unreadThreadIds.includes(threadId)) {
 			unreadThreadIds = [...unreadThreadIds, threadId];
@@ -159,12 +201,15 @@
 		);
 	};
 
+
 	const createThreadFromSelection = (action: FloatingAction) => {
 		if (!pendingSelection) {
 			return null;
 		}
 
-		const existingThread = threads.find((thread) => sameAnchor(thread.anchor, pendingSelection.anchor));
+		const existingThread = threads.find((thread) =>
+			sameSelectionThreadAnchor(thread.anchor, pendingSelection.anchor)
+		);
 		if (existingThread) {
 			onSetActiveThread(existingThread.id);
 			onClearPendingSelection();
@@ -498,13 +543,18 @@
 			onSetActiveThread(null);
 		}
 
+		const restoredSnapshot = interruptSelectionThread({
+			...snapshot,
+			updatedAt: Date.now()
+		});
+
 		toast.message($i18n.t('Selection thread deleted'), {
 			action: {
 				label: $i18n.t('Undo'),
 				onClick: () => {
 					onThreadsChange(
 						(currentThreads) =>
-							[...currentThreads, { ...snapshot, updatedAt: Date.now() }].sort(
+							[...currentThreads, restoredSnapshot].sort(
 								(left, right) => left.createdAt - right.createdAt
 							),
 						{ immediate: true }
@@ -536,15 +586,18 @@
 	};
 
 	$: {
+		const focusThreadId = activeThread && !getThreadBusy(activeThread) ? activeThread.id : null;
 		const nextSignature =
-			activeThread && !getThreadBusy(activeThread)
-				? `${activeThread.id}:${activeThread.turns.length}`
-				: '';
+			focusThreadId && activeThread ? `${focusThreadId}:${activeThread.turns.length}` : '';
 
 		if (nextSignature && nextSignature !== lastFocusedThreadSignature) {
 			lastFocusedThreadSignature = nextSignature;
 			tick().then(() => {
-				document.getElementById(`selection-thread-input-${activeThread!.id}`)?.focus();
+				if (!focusThreadId || activeThreadId !== focusThreadId) {
+					return;
+				}
+
+				document.getElementById(`selection-thread-input-${focusThreadId}`)?.focus();
 			});
 		} else if (!nextSignature) {
 			lastFocusedThreadSignature = '';
@@ -552,8 +605,19 @@
 	}
 
 	onDestroy(() => {
+		const runningThreadIds = new Set(requestControllers.keys());
 		requestControllers.forEach((controller) => controller.abort());
 		requestControllers.clear();
+
+		if (runningThreadIds.size > 0) {
+			onThreadsChange(
+				(currentThreads) =>
+					currentThreads.map((thread) =>
+						runningThreadIds.has(thread.id) ? interruptSelectionThread(thread) : thread
+					),
+				{ persist: false }
+			);
+		}
 	});
 </script>
 
@@ -562,6 +626,8 @@
 		<div
 			class="absolute pointer-events-auto floating-panel-appear"
 			style={`top:${pendingSelectionPosition.top}px; left:${pendingSelectionPosition.left}px;`}
+			on:mousedown|stopPropagation
+			on:mouseup|stopPropagation
 		>
 			<div
 				class="flex flex-row gap-0.5 shrink-0 px-1.5 py-1 bg-white/95 dark:bg-gray-800/95 backdrop-blur-xl text-gray-600 dark:text-gray-300 rounded-xl shadow-sm border border-gray-200/50 dark:border-gray-700/50"
@@ -585,13 +651,16 @@
 		{@const layout = threadLayouts[thread.id]}
 		{@const lastAssistantTurn = getLastAssistantTurn(thread)}
 		{#if layout && thread.id !== activeThreadId}
+			{@const markerTone = getThreadMarkerTone(thread)}
 			<button
-				class="absolute pointer-events-auto selection-thread-marker floating-panel-appear"
+				class={`absolute pointer-events-auto selection-thread-marker floating-panel-appear selection-thread-marker-${markerTone}`}
 				style={`top:${layout.markerTop}px; left:${layout.markerLeft}px;`}
+				on:mousedown|stopPropagation
+				on:mouseup|stopPropagation
 				on:click={() => onSetActiveThread(thread.id)}
 				aria-label={$i18n.t('Open selection thread')}
 			>
-				<span class="text-[10px] font-semibold">AI</span>
+				<span class="text-[10px] font-semibold">{getThreadMarkerLabel(thread)}</span>
 				{#if thread.pinned}
 					<span class="selection-thread-dot bg-amber-400"></span>
 				{:else if lastAssistantTurn?.role === 'assistant' && lastAssistantTurn.state === 'streaming'}
@@ -613,6 +682,8 @@
 			style={$mobile || !layout
 				? undefined
 				: `top:${layout.cardTop}px; left:${layout.cardLeft}px; max-width:${layout.cardMaxWidth}px; width:min(24rem, calc(100vw - 2rem));`}
+			on:mousedown|stopPropagation
+			on:mouseup|stopPropagation
 		>
 			<div class="relative bg-white/95 dark:bg-gray-800/95 backdrop-blur-xl dark:text-gray-100 rounded-2xl shadow-lg border border-gray-200/50 dark:border-gray-700/50 selection-thread-card">
 				<div class="absolute top-2 right-2 flex items-center gap-1 z-10">
@@ -651,14 +722,21 @@
 					</button>
 				</div>
 
-				<div class="bg-blue-50/40 dark:bg-blue-900/10 rounded-t-2xl px-4 py-3 pr-20">
-					<div class="flex items-start gap-2">
-						<div class="w-0.5 self-stretch rounded-full bg-blue-400/60 dark:bg-blue-500/50 shrink-0 min-h-4"></div>
-						<div class="text-xs text-gray-500 dark:text-gray-400 line-clamp-4 italic leading-relaxed">
-							{activeThread.quote}
+					<div class="bg-blue-50/40 dark:bg-blue-900/10 rounded-t-2xl px-4 py-3 pr-20">
+						<div class="flex items-start justify-between gap-3">
+							<div class="flex items-start gap-2 min-w-0">
+								<div class="w-0.5 self-stretch rounded-full bg-blue-400/60 dark:bg-blue-500/50 shrink-0 min-h-4"></div>
+								<div class="text-xs text-gray-500 dark:text-gray-400 line-clamp-4 italic leading-relaxed">
+									{activeThread.quote}
+								</div>
+							</div>
+							{#if getThreadStatusText(activeThread)}
+								<span class="selection-thread-status-chip">
+									{getThreadStatusText(activeThread)}
+								</span>
+							{/if}
 						</div>
 					</div>
-				</div>
 
 				<div class="px-4 py-3">
 					<div
@@ -758,11 +836,40 @@
 		backdrop-filter: blur(12px);
 	}
 
+	.selection-thread-marker-running {
+		border-color: rgba(52, 211, 153, 0.55);
+		color: rgb(5, 150, 105);
+	}
+
+	.selection-thread-marker-new {
+		border-color: rgba(56, 189, 248, 0.55);
+		color: rgb(3, 105, 161);
+	}
+
+	.selection-thread-marker-pinned {
+		border-color: rgba(251, 191, 36, 0.55);
+		color: rgb(180, 83, 9);
+	}
+
 	.selection-thread-dot {
 		display: inline-flex;
 		width: 0.5rem;
 		height: 0.5rem;
 		border-radius: 9999px;
+	}
+
+	.selection-thread-status-chip {
+		display: inline-flex;
+		align-items: center;
+		flex-shrink: 0;
+		border-radius: 9999px;
+		background: rgba(255, 255, 255, 0.75);
+		padding: 0.2rem 0.5rem;
+		font-size: 0.6875rem;
+		line-height: 1;
+		font-weight: 600;
+		color: rgb(8, 145, 178);
+		border: 1px solid rgba(125, 211, 252, 0.45);
 	}
 
 	.selection-thread-card {
@@ -839,6 +946,12 @@
 		border-color: rgba(12, 74, 110, 0.6);
 		background: rgba(17, 24, 39, 0.95);
 		color: rgb(125, 211, 252);
+	}
+
+	:global(.dark) .selection-thread-status-chip {
+		background: rgba(15, 23, 42, 0.55);
+		color: rgb(125, 211, 252);
+		border-color: rgba(56, 189, 248, 0.35);
 	}
 
 	:global(.dark) .selection-thread-icon-button:hover {

@@ -101,6 +101,9 @@ RUN set -eux; \
     fi; \
     pip install --no-cache-dir -r "${requirements_file}"; \
     if [ "$HALO_RUNTIME_PROFILE" = "main" ]; then \
+        pip install --no-cache-dir -r requirements/storage-s3.txt; \
+    fi; \
+    if [ "$HALO_RUNTIME_PROFILE" = "main" ]; then \
         pip install --no-cache-dir uv; \
     fi; \
     if [ "$PRELOAD_LOCAL_MODELS" = "true" ]; then \

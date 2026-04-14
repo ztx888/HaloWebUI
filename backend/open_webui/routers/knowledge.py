@@ -44,6 +44,20 @@ log.setLevel(SRC_LOG_LEVELS["MODELS"])
 
 router = APIRouter()
 
+
+class KnowledgeFilesResponse(KnowledgeResponse):
+    files: list[FileModel]
+
+
+class KnowledgeSearchResponse(BaseModel):
+    items: list[KnowledgeUserResponse]
+    total: int
+
+
+class KnowledgeFileSearchResponse(BaseModel):
+    items: list[dict]
+    total: int
+
 ############################
 # getKnowledgeBases
 ############################
@@ -143,6 +157,100 @@ async def get_knowledge_list(user=Depends(get_verified_user)):
             )
         )
     return knowledge_with_files
+
+
+@router.get("/search", response_model=KnowledgeSearchResponse)
+async def search_knowledge_bases(
+    query: Optional[str] = None,
+    view_option: Optional[str] = None,
+    page: int = Query(default=1, ge=1),
+    limit: int = Query(default=30, ge=1, le=100),
+    user=Depends(get_verified_user),
+):
+    knowledge_bases = (
+        Knowledges.get_knowledge_bases()
+        if user.role == "admin"
+        else Knowledges.get_knowledge_bases_by_user_id(user.id, "read")
+    )
+
+    filtered = knowledge_bases
+    if view_option == "created":
+        filtered = [item for item in filtered if item.user_id == user.id]
+    elif view_option == "shared":
+        filtered = [item for item in filtered if item.user_id != user.id]
+
+    if query:
+        query_lower = query.strip().lower()
+        filtered = [
+            item
+            for item in filtered
+            if query_lower in (item.name or "").lower()
+            or query_lower in (item.description or "").lower()
+            or query_lower in ((item.user.name if item.user else "") or "").lower()
+            or query_lower in ((item.user.email if item.user else "") or "").lower()
+        ]
+
+    total = len(filtered)
+    offset = (page - 1) * limit
+    return KnowledgeSearchResponse(items=filtered[offset : offset + limit], total=total)
+
+
+@router.get("/search/files", response_model=KnowledgeFileSearchResponse)
+async def search_knowledge_files(
+    query: Optional[str] = None,
+    page: int = Query(default=1, ge=1),
+    limit: int = Query(default=30, ge=1, le=100),
+    user=Depends(get_verified_user),
+):
+    knowledge_bases = (
+        Knowledges.get_knowledge_bases()
+        if user.role == "admin"
+        else Knowledges.get_knowledge_bases_by_user_id(user.id, "read")
+    )
+
+    file_to_collection: dict[str, dict] = {}
+    all_file_ids: list[str] = []
+    for knowledge_base in knowledge_bases:
+        file_ids = (knowledge_base.data or {}).get("file_ids", [])
+        for file_id in file_ids:
+            all_file_ids.append(file_id)
+            file_to_collection[file_id] = {
+                "id": knowledge_base.id,
+                "name": knowledge_base.name,
+                "description": knowledge_base.description,
+            }
+
+    files = Files.get_file_metadatas_by_ids(list(dict.fromkeys(all_file_ids))) if all_file_ids else []
+    items = []
+    for file in files:
+        meta = file.meta or {}
+        filename = meta.get("name") or meta.get("filename") or meta.get("title") or file.id
+        items.append(
+            {
+                "id": file.id,
+                "meta": meta,
+                "filename": filename,
+                "name": filename,
+                "type": "file",
+                "collection": file_to_collection.get(file.id),
+                "created_at": file.created_at,
+                "updated_at": file.updated_at,
+            }
+        )
+
+    if query:
+        query_lower = query.strip().lower()
+        items = [
+            item
+            for item in items
+            if query_lower in (item.get("filename") or "").lower()
+            or query_lower in ((item.get("collection") or {}).get("name") or "").lower()
+            or query_lower in ((item.get("collection") or {}).get("description") or "").lower()
+        ]
+
+    total = len(items)
+    offset = (page - 1) * limit
+    return KnowledgeFileSearchResponse(items=items[offset : offset + limit], total=total)
 
 
 ############################
@@ -251,10 +359,6 @@ async def reindex_knowledge_files(request: Request, user=Depends(get_verified_us
 ############################
 # GetKnowledgeById
 ############################
-
-
-class KnowledgeFilesResponse(KnowledgeResponse):
-    files: list[FileModel]
 
 
 @router.get("/{id}", response_model=Optional[KnowledgeFilesResponse])

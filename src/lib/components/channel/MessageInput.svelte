@@ -7,7 +7,19 @@
 	const i18n = getContext('i18n');
 
 	import { config, mobile, settings, socket, user } from '$lib/stores';
-	import { blobToFile, compressImage } from '$lib/utils';
+	import {
+		blobToFile,
+		compressImage,
+		convertHeicToJpeg,
+		extractInputVariables,
+		getAge,
+		getCurrentDateTime,
+		getFormattedDate,
+		getFormattedTime,
+		getUserPosition,
+		getUserTimezone,
+		getWeekday
+	} from '$lib/utils';
 	import {
 		buildIgnoredFailedFilesMessage,
 		getFileUploadDiagnostic,
@@ -19,15 +31,18 @@
 	import Tooltip from '../common/Tooltip.svelte';
 	import RichTextInput from '../common/RichTextInput.svelte';
 	import VoiceRecording from '../chat/MessageInput/VoiceRecording.svelte';
+	import InputVariablesModal from '../chat/MessageInput/InputVariablesModal.svelte';
+	import CommandSuggestionList from '../chat/MessageInput/CommandSuggestionList.svelte';
 	import InputMenu from './MessageInput/InputMenu.svelte';
 	import { uploadFile } from '$lib/apis/files';
-	import { WEBUI_API_BASE_URL } from '$lib/constants';
+	import { PASTED_TEXT_CHARACTER_LIMIT, WEBUI_API_BASE_URL } from '$lib/constants';
 	import FileItem from '../common/FileItem.svelte';
 	import Image from '../common/Image.svelte';
 	import { transcribeAudio } from '$lib/apis/audio';
 	import FilesOverlay from '../chat/MessageInput/FilesOverlay.svelte';
+	import { getSuggestionRenderer } from '../common/RichTextInput/suggestions';
 	import MentionList from './MessageInput/MentionList.svelte';
-	import { getUsers } from '$lib/apis/users';
+	import { getSessionUser } from '$lib/apis/auths';
 
 	export let placeholder = $i18n.t('Send a Message');
 	export let transparentBackground = false;
@@ -39,55 +54,155 @@
 	let recording = false;
 	let content = '';
 	let files = [];
+	let chatInputElement;
+	let command = '';
+	let suggestions = null;
 
 	let filesInputElement;
 	let inputFiles;
-
-	// @mention support
-	let showMentions = false;
-	let mentionQuery = '';
-	let mentionUsers: any[] = [];
-	let mentionListEl: MentionList;
-
-	$: {
-		// Detect @mention trigger: look for @ followed by word chars at end of text
-		const match = content.match(/@(\w*)$/);
-		if (match) {
-			showMentions = true;
-			mentionQuery = match[1];
-		} else {
-			showMentions = false;
-			mentionQuery = '';
-		}
-	}
-
-	const loadMentionUsers = async () => {
-		if (mentionUsers.length === 0) {
-			try {
-				mentionUsers = await getUsers(localStorage.token);
-			} catch {
-				mentionUsers = [];
-			}
-		}
-	};
-
-	$: if (showMentions) {
-		loadMentionUsers();
-	}
-
-	const handleMentionSelect = (e: CustomEvent) => {
-		const user = e.detail;
-		// Replace @query with @username
-		content = content.replace(/@(\w*)$/, `@${user.name} `);
-		showMentions = false;
-	};
+	let showInputVariablesModal = false;
+	let inputVariables = {};
+	let inputVariableValues = {};
+	let inputVariablesModalCallback = (_variableValues) => {};
 
 	export let typingUsers = [];
+	export let userSuggestions = true;
+	export let channelSuggestions = false;
 
 	export let onSubmit: Function;
 	export let onChange: Function;
 	export let scrollEnd = true;
 	export let scrollToBottom: Function = () => {};
+
+	const inputVariableHandler = async (text: string): Promise<string> => {
+		inputVariables = extractInputVariables(text);
+
+		if (Object.keys(inputVariables).length === 0) {
+			return text;
+		}
+
+		showInputVariablesModal = true;
+		return await new Promise<string>((resolve) => {
+			inputVariablesModalCallback = (variableValues) => {
+				inputVariableValues = { ...inputVariableValues, ...variableValues };
+				chatInputElement?.replaceVariables?.(inputVariableValues);
+				showInputVariablesModal = false;
+				resolve(text);
+			};
+		});
+	};
+
+	const textVariableHandler = async (text: string) => {
+		if (text.includes('{{CLIPBOARD}}')) {
+			const clipboardText = await navigator.clipboard.readText().catch(() => {
+				toast.error($i18n.t('Failed to read clipboard contents'));
+				return '{{CLIPBOARD}}';
+			});
+
+			const clipboardItems = await navigator.clipboard.read().catch(() => []);
+			for (const item of clipboardItems) {
+				for (const type of item.types) {
+					if (type.startsWith('image/')) {
+						const blob = await item.getType(type);
+						const file = new File([blob], `clipboard-image.${type.split('/')[1]}`, { type });
+						await inputFilesHandler([file]);
+					}
+				}
+			}
+
+			text = text.replaceAll('{{CLIPBOARD}}', clipboardText.replaceAll('\r\n', '\n'));
+		}
+
+		if (text.includes('{{USER_LOCATION}}')) {
+			let location;
+			try {
+				location = await getUserPosition();
+			} catch {
+				toast.error($i18n.t('Location access not allowed'));
+				location = 'LOCATION_UNKNOWN';
+			}
+			text = text.replaceAll('{{USER_LOCATION}}', String(location));
+		}
+
+		const sessionUser = await getSessionUser(localStorage.token).catch(() => null);
+
+		if (text.includes('{{USER_NAME}}')) {
+			text = text.replaceAll('{{USER_NAME}}', sessionUser?.name || 'User');
+		}
+		if (text.includes('{{USER_EMAIL}}') && sessionUser?.email) {
+			text = text.replaceAll('{{USER_EMAIL}}', sessionUser.email);
+		}
+		if (text.includes('{{USER_BIO}}') && sessionUser?.bio) {
+			text = text.replaceAll('{{USER_BIO}}', sessionUser.bio);
+		}
+		if (text.includes('{{USER_GENDER}}') && sessionUser?.gender) {
+			text = text.replaceAll('{{USER_GENDER}}', sessionUser.gender);
+		}
+		if (text.includes('{{USER_BIRTH_DATE}}') && sessionUser?.date_of_birth) {
+			text = text.replaceAll('{{USER_BIRTH_DATE}}', sessionUser.date_of_birth);
+		}
+		if (text.includes('{{USER_AGE}}') && sessionUser?.date_of_birth) {
+			text = text.replaceAll('{{USER_AGE}}', getAge(sessionUser.date_of_birth));
+		}
+		if (text.includes('{{USER_LANGUAGE}}')) {
+			text = text.replaceAll('{{USER_LANGUAGE}}', localStorage.getItem('locale') || 'en-US');
+		}
+		if (text.includes('{{CURRENT_DATE}}')) {
+			text = text.replaceAll('{{CURRENT_DATE}}', getFormattedDate());
+		}
+		if (text.includes('{{CURRENT_TIME}}')) {
+			text = text.replaceAll('{{CURRENT_TIME}}', getFormattedTime());
+		}
+		if (text.includes('{{CURRENT_DATETIME}}')) {
+			text = text.replaceAll('{{CURRENT_DATETIME}}', getCurrentDateTime());
+		}
+		if (text.includes('{{CURRENT_TIMEZONE}}')) {
+			text = text.replaceAll('{{CURRENT_TIMEZONE}}', getUserTimezone());
+		}
+		if (text.includes('{{CURRENT_WEEKDAY}}')) {
+			text = text.replaceAll('{{CURRENT_WEEKDAY}}', getWeekday());
+		}
+
+		return text;
+	};
+
+	const getCommand = () => {
+		const chatInput = document.getElementById(`chat-input-${id}`);
+		if (!chatInput) {
+			return '';
+		}
+		return chatInputElement?.getWordAtDocPos?.() ?? '';
+	};
+
+	const replaceCommandWithText = (text: string) => {
+		const chatInput = document.getElementById(`chat-input-${id}`);
+		if (!chatInput) {
+			return;
+		}
+		chatInputElement?.replaceCommandWithText?.(text);
+	};
+
+	const insertTextAtCursor = async (text: string) => {
+		const chatInput = document.getElementById(`chat-input-${id}`);
+		if (!chatInput) {
+			return;
+		}
+
+		text = await textVariableHandler(text);
+
+		if (command) {
+			replaceCommandWithText(text);
+		} else {
+			chatInputElement?.insertContent?.(text);
+		}
+
+		await tick();
+		text = await inputVariableHandler(text);
+		await tick();
+
+		chatInputElement?.focus?.();
+		chatInput.dispatchEvent(new Event('input'));
+	};
 
 	const screenCaptureHandler = async () => {
 		try {
@@ -357,9 +472,8 @@
 		files = failedFiles;
 
 		await tick();
-
-		const chatInputElement = document.getElementById(`chat-input-${id}`);
-		chatInputElement?.focus();
+		chatInputElement?.setText?.('');
+		chatInputElement?.focus?.();
 	};
 
 	$: if (content) {
@@ -367,6 +481,49 @@
 	}
 
 	onMount(async () => {
+		suggestions = [
+			{
+				char: '@',
+				render: getSuggestionRenderer(MentionList, {
+					i18n,
+					triggerChar: '@',
+					userSuggestions,
+					channelSuggestions: false
+				})
+			},
+			...(channelSuggestions
+				? [
+						{
+							char: '#',
+							render: getSuggestionRenderer(MentionList, {
+								i18n,
+								triggerChar: '#',
+								channelSuggestions: true
+							})
+						}
+					]
+				: []),
+			{
+				char: '/',
+				render: getSuggestionRenderer(CommandSuggestionList, {
+					i18n,
+					onSelect: () => {
+						document.getElementById(`chat-input-${id}`)?.focus();
+					},
+					insertTextHandler: insertTextAtCursor,
+					onUpload: (event) => {
+						const { type, data } = event;
+						if (type === 'file') {
+							if (files.find((file) => file.id === data.id)) {
+								return;
+							}
+							files = [...files, { ...data, status: 'processed' }];
+						}
+					}
+				})
+			}
+		];
+
 		window.setTimeout(() => {
 			const chatInput = document.getElementById(`chat-input-${id}`);
 			chatInput?.focus();
@@ -397,6 +554,11 @@
 </script>
 
 <FilesOverlay show={draggedOver} />
+<InputVariablesModal
+	bind:show={showInputVariablesModal}
+	variables={inputVariables}
+	onSave={inputVariablesModalCallback}
+/>
 
 <input
 	bind:this={filesInputElement}
@@ -553,19 +715,12 @@
 						{/if}
 
 						<div class="px-2.5 relative">
-							{#if showMentions}
-								<MentionList
-									bind:this={mentionListEl}
-									query={mentionQuery}
-									users={mentionUsers}
-									on:select={handleMentionSelect}
-								/>
-							{/if}
 							<div
 								class="scrollbar-hidden font-primary text-left bg-transparent dark:text-gray-100 outline-hidden w-full pt-3 px-1 rounded-xl resize-none h-fit max-h-80 overflow-auto"
 							>
 								<RichTextInput
-									bind:value={content}
+									bind:this={chatInputElement}
+									value={content}
 									id={`chat-input-${id}`}
 									messageInput={true}
 									showFormattingToolbar={$settings?.showFormattingToolbar ?? false}
@@ -578,36 +733,74 @@
 										)}
 									{placeholder}
 									largeTextAsFile={$settings?.largeTextAsFile ?? false}
+									{suggestions}
+									onChange={(nextContent) => {
+										content = nextContent.md;
+										command = getCommand();
+									}}
 									on:keydown={async (e) => {
 										e = e.detail.event;
-										const isCtrlPressed = e.ctrlKey || e.metaKey; // metaKey is for Cmd key on Mac
+										const suggestionsContainerElement =
+											document.getElementById('suggestions-container');
 										if (
-											!$mobile ||
-											!(
-												'ontouchstart' in window ||
-												navigator.maxTouchPoints > 0 ||
-												navigator.msMaxTouchPoints > 0
-											)
+											!suggestionsContainerElement &&
+											(!$mobile ||
+												!(
+													'ontouchstart' in window ||
+													navigator.maxTouchPoints > 0 ||
+													navigator.msMaxTouchPoints > 0
+												))
 										) {
-											// Prevent Enter key from creating a new line
-											// Uses keyCode '13' for Enter key for chinese/japanese keyboards
 											if (e.keyCode === 13 && !e.shiftKey) {
 												e.preventDefault();
 											}
 
-											// Submit the content when Enter key is pressed
 											if (content !== '' && e.keyCode === 13 && !e.shiftKey) {
 												submitHandler();
 											}
 										}
-
-										if (e.key === 'Escape') {
-											console.log('Escape');
-										}
 									}}
 									on:paste={async (e) => {
 										e = e.detail.event;
-										console.log(e);
+										const clipboardData = e.clipboardData || window.clipboardData;
+
+										if (clipboardData && clipboardData.items) {
+											for (const item of clipboardData.items) {
+												if (item.type.indexOf('image') !== -1) {
+													let blob = item.getAsFile();
+													if (blob && blob.type === 'image/heic') {
+														try {
+															blob = await convertHeicToJpeg(blob);
+														} catch (error) {
+															console.error('HEIC paste conversion failed:', error);
+															continue;
+														}
+													}
+
+													const reader = new FileReader();
+													reader.onload = function (event) {
+														files = [
+															...files,
+															{
+																type: 'image',
+																url: `${event.target.result}`
+															}
+														];
+													};
+													reader.readAsDataURL(blob);
+												} else if (item.type === 'text/plain' && ($settings?.largeTextAsFile ?? false)) {
+													const text = clipboardData.getData('text/plain');
+													if (text.length > PASTED_TEXT_CHARACTER_LIMIT) {
+														e.preventDefault();
+														const blob = new Blob([text], { type: 'text/plain' });
+														const file = new File([blob], `Pasted_Text_${Date.now()}.txt`, {
+															type: 'text/plain'
+														});
+														await uploadFileHandler(file);
+													}
+												}
+											}
+										}
 									}}
 								/>
 							</div>

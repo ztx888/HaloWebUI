@@ -1,47 +1,38 @@
 <script lang="ts">
 	import Fuse from 'fuse.js';
-
-	import { createEventDispatcher, onMount } from 'svelte';
-	import { tick, getContext } from 'svelte';
-
+	import { getContext } from 'svelte';
 	import { models } from '$lib/stores';
+	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import ModelIcon from '$lib/components/common/ModelIcon.svelte';
 	import { getModelChatDisplayName } from '$lib/utils/model-display';
 
 	const i18n = getContext('i18n');
 
-	const dispatch = createEventDispatcher();
-
-	export let command = '';
+	export let query = '';
+	export let onSelect = (_event) => {};
+	export let filteredItems = [];
 
 	let selectedIdx = 0;
-	let filteredItems = [];
-
 	let fuse = new Fuse(
 		$models
-			.filter((model) => !model?.info?.meta?.hidden)
-			.map((model) => {
-				const _item = {
+				.filter((model) => !model?.info?.meta?.hidden)
+				.map((model) => ({
 					...model,
 					modelName: getModelChatDisplayName(model),
 					tags: model?.info?.meta?.tags?.map((tag) => tag.name).join(' '),
 					desc: model?.info?.meta?.description
-				};
-				return _item;
-			}),
+				})),
 		{
 			keys: ['value', 'tags', 'modelName'],
-			threshold: 0.3
+			threshold: 0.5
 		}
 	);
 
-	$: filteredItems = command.slice(1)
-		? fuse.search(command).map((e) => {
-				return e.item;
-			})
+	$: filteredItems = query
+		? fuse.search(query).map((entry) => entry.item)
 		: $models.filter((model) => !model?.info?.meta?.hidden);
 
-	$: if (command) {
+	$: if (query) {
 		selectedIdx = 0;
 	}
 
@@ -53,58 +44,43 @@
 		selectedIdx = Math.min(selectedIdx + 1, filteredItems.length - 1);
 	};
 
-	const confirmSelect = async (model) => {
-		command = '';
-		dispatch('select', model);
+	export const select = () => {
+		const model = filteredItems[selectedIdx];
+		if (model) {
+			onSelect({ type: 'model', data: model });
+		}
 	};
-
-	onMount(async () => {
-		await tick();
-		const chatInputElement = document.getElementById('chat-input');
-		await tick();
-		chatInputElement?.focus();
-		await tick();
-	});
 </script>
 
+<div class="px-2 text-xs text-gray-500 py-1">{$i18n.t('Models')}</div>
+
 {#if filteredItems.length > 0}
-	<div
-		id="commands-container"
-		class="px-2 mb-2 text-left w-full absolute bottom-0 left-0 right-0 z-10"
-	>
-		<div class="flex w-full rounded-xl border border-gray-100 dark:border-gray-850">
-			<div
-				class="max-h-60 flex flex-col w-full rounded-xl bg-white dark:bg-gray-900 dark:text-gray-100"
-			>
-				<div class="m-1 overflow-y-auto p-1 rounded-r-lg space-y-0.5 scrollbar-hidden">
-					{#each filteredItems as model, modelIdx}
-						<button
-							class="px-3 py-1.5 rounded-xl w-full text-left {modelIdx === selectedIdx
-								? 'bg-gray-50 dark:bg-gray-850 selected-command-option-button'
-								: ''}"
-							type="button"
-							on:click={() => {
-								confirmSelect(model);
-							}}
-							on:mousemove={() => {
-								selectedIdx = modelIdx;
-							}}
-							on:focus={() => {}}
-						>
-							<div class="flex font-medium text-black dark:text-gray-100 line-clamp-1">
-								<ModelIcon
-									src={model?.info?.meta?.profile_image_url ??
-										model?.meta?.profile_image_url ??
-										'/static/favicon.png'}
-									alt={model?.name ?? model.id}
-									className="rounded-lg size-6 mr-2 shrink-0"
-								/>
-								<span class="line-clamp-1">{getModelChatDisplayName(model)}</span>
-							</div>
-						</button>
-					{/each}
-				</div>
-			</div>
-		</div>
-	</div>
+	{#each filteredItems as model, modelIdx}
+		<Tooltip content={model.id} placement="top-start">
+			<button
+				class="px-2.5 py-1.5 rounded-xl w-full text-left {modelIdx === selectedIdx
+					? 'bg-gray-50 dark:bg-gray-800 selected-command-option-button'
+					: ''}"
+				type="button"
+				data-selected={modelIdx === selectedIdx}
+				on:click={() => {
+					onSelect({ type: 'model', data: model });
+				}}
+				on:mousemove={() => {
+					selectedIdx = modelIdx;
+				}}
+				>
+					<div class="flex text-black dark:text-gray-100 line-clamp-1">
+						<ModelIcon
+							src={model?.info?.meta?.profile_image_url ??
+								model?.meta?.profile_image_url ??
+								'/static/favicon.png'}
+							alt={model?.name ?? model.id}
+							className="rounded-lg size-6 mr-2 shrink-0"
+						/>
+						<div class="truncate">{getModelChatDisplayName(model)}</div>
+					</div>
+				</button>
+			</Tooltip>
+	{/each}
 {/if}

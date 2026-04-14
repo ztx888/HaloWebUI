@@ -18,6 +18,22 @@ type PromptListResponse = {
 	total: number;
 };
 
+const normalizePromptCommand = (command: string) =>
+	(command || '').startsWith('/') ? command.slice(1) : command;
+
+const normalizePromptItem = (item) =>
+	item
+		? {
+				...item,
+				command: normalizePromptCommand(item.command)
+			}
+		: item;
+
+const normalizePromptListResponse = (response: PromptListResponse): PromptListResponse => ({
+	...response,
+	items: (response?.items ?? []).map((item) => normalizePromptItem(item))
+});
+
 // ────────────────────────────────
 // Create
 // ────────────────────────────────
@@ -34,7 +50,7 @@ export const createNewPrompt = async (token: string, prompt: PromptItem) => {
 		},
 		body: JSON.stringify({
 			...prompt,
-			command: prompt.command.startsWith('/') ? prompt.command : `/${prompt.command}`
+			command: normalizePromptCommand(prompt.command)
 		})
 	})
 		.then(parseJsonResponse)
@@ -48,7 +64,7 @@ export const createNewPrompt = async (token: string, prompt: PromptItem) => {
 		throw error;
 	}
 
-	return res;
+	return normalizePromptItem(res);
 };
 
 // ────────────────────────────────
@@ -77,7 +93,7 @@ export const getPrompts = async (token: string = '') => {
 		throw error;
 	}
 
-	return res;
+	return (res ?? []).map((item) => normalizePromptItem(item));
 };
 
 // ────────────────────────────────
@@ -117,7 +133,7 @@ export const getPromptList = async (
 		throw error;
 	}
 
-	return res;
+	return normalizePromptListResponse(res);
 };
 
 // ────────────────────────────────
@@ -146,7 +162,7 @@ export const getPromptById = async (token: string, promptId: string) => {
 		throw error;
 	}
 
-	return res;
+	return normalizePromptItem(res);
 };
 
 // ────────────────────────────────
@@ -156,7 +172,9 @@ export const getPromptById = async (token: string, promptId: string) => {
 export const getPromptByCommand = async (token: string, command: string) => {
 	let error = null;
 
-	const res = await fetch(`${WEBUI_API_BASE_URL}/prompts/command/${command}`, {
+	const normalizedCommand = normalizePromptCommand(command);
+
+	const res = await fetch(`${WEBUI_API_BASE_URL}/prompts/command/${normalizedCommand}`, {
 		method: 'GET',
 		headers: {
 			Accept: 'application/json',
@@ -175,7 +193,7 @@ export const getPromptByCommand = async (token: string, command: string) => {
 		throw error;
 	}
 
-	return res;
+	return normalizePromptItem(res);
 };
 
 // ────────────────────────────────
@@ -194,7 +212,7 @@ export const updatePromptById = async (token: string, promptId: string, prompt: 
 		},
 		body: JSON.stringify({
 			...prompt,
-			command: prompt.command.startsWith('/') ? prompt.command : `/${prompt.command}`
+			command: normalizePromptCommand(prompt.command)
 		})
 	})
 		.then(parseJsonResponse)
@@ -208,7 +226,7 @@ export const updatePromptById = async (token: string, promptId: string, prompt: 
 		throw error;
 	}
 
-	return res;
+	return normalizePromptItem(res);
 };
 
 // ────────────────────────────────
@@ -218,7 +236,7 @@ export const updatePromptById = async (token: string, promptId: string, prompt: 
 export const updatePromptByCommand = async (token: string, prompt: PromptItem) => {
 	let error = null;
 
-	const command = prompt.command.startsWith('/') ? prompt.command.slice(1) : prompt.command;
+	const command = normalizePromptCommand(prompt.command);
 
 	const res = await fetch(`${WEBUI_API_BASE_URL}/prompts/command/${command}/update`, {
 		method: 'POST',
@@ -229,7 +247,7 @@ export const updatePromptByCommand = async (token: string, prompt: PromptItem) =
 		},
 		body: JSON.stringify({
 			...prompt,
-			command: `/${command}`
+			command
 		})
 	})
 		.then(parseJsonResponse)
@@ -243,7 +261,7 @@ export const updatePromptByCommand = async (token: string, prompt: PromptItem) =
 		throw error;
 	}
 
-	return res;
+	return normalizePromptItem(res);
 };
 
 // ────────────────────────────────
@@ -278,7 +296,7 @@ export const updatePromptMeta = async (
 		throw error;
 	}
 
-	return res;
+	return normalizePromptItem(res);
 };
 
 // ────────────────────────────────
@@ -307,7 +325,7 @@ export const togglePromptById = async (token: string, promptId: string) => {
 		throw error;
 	}
 
-	return res;
+	return normalizePromptItem(res);
 };
 
 // ────────────────────────────────
@@ -317,7 +335,7 @@ export const togglePromptById = async (token: string, promptId: string) => {
 export const togglePromptByCommand = async (token: string, command: string) => {
 	let error = null;
 
-	command = command.charAt(0) === '/' ? command.slice(1) : command;
+	command = normalizePromptCommand(command);
 
 	const res = await fetch(`${WEBUI_API_BASE_URL}/prompts/command/${command}/toggle`, {
 		method: 'POST',
@@ -338,7 +356,7 @@ export const togglePromptByCommand = async (token: string, command: string) => {
 		throw error;
 	}
 
-	return res;
+	return normalizePromptItem(res);
 };
 
 // ────────────────────────────────

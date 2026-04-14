@@ -128,6 +128,22 @@ class PromptMetaForm(BaseModel):
 
 
 class PromptsTable:
+    @staticmethod
+    def _normalize_command(command: str) -> str:
+        command = (command or "").strip()
+        return command[1:] if command.startswith("/") else command
+
+    def _command_candidates(self, command: str) -> list[str]:
+        normalized = self._normalize_command(command)
+        if not normalized:
+            return []
+        return list(dict.fromkeys([normalized, f"/{normalized}"]))
+
+    def _to_prompt_model(self, prompt: Prompt) -> PromptModel:
+        payload = PromptModel.model_validate(prompt).model_dump()
+        payload["command"] = self._normalize_command(payload.get("command", ""))
+        return PromptModel.model_validate(payload)
+
     def _uses_legacy_integer_id(self, db) -> bool:
         try:
             column_info = next(
@@ -177,7 +193,7 @@ class PromptsTable:
                 result = Prompt(
                     id=prompt_id,
                     user_id=user_id,
-                    command=form_data.command,
+                    command=self._normalize_command(form_data.command),
                     name=form_data.name,
                     content=form_data.content,
                     data=form_data.data,
@@ -195,7 +211,7 @@ class PromptsTable:
                 db.commit()
                 db.refresh(result)
                 if result:
-                    return PromptModel.model_validate(result)
+                    return self._to_prompt_model(result)
                 return None
         except Exception:
             log.exception("Failed to insert prompt %s", form_data.command)
@@ -210,7 +226,7 @@ class PromptsTable:
                     .first()
                 )
                 if prompt:
-                    return PromptModel.model_validate(prompt)
+                    return self._to_prompt_model(prompt)
                 return None
         except Exception:
             return None
@@ -218,9 +234,12 @@ class PromptsTable:
     def get_prompt_by_command(self, command: str) -> Optional[PromptModel]:
         try:
             with get_db() as db:
-                prompt = db.query(Prompt).filter_by(command=command).first()
+                candidates = self._command_candidates(command)
+                if not candidates:
+                    return None
+                prompt = db.query(Prompt).filter(Prompt.command.in_(candidates)).first()
                 if prompt:
-                    return PromptModel.model_validate(prompt)
+                    return self._to_prompt_model(prompt)
                 return None
         except Exception:
             return None
@@ -233,7 +252,7 @@ class PromptsTable:
                 prompts.append(
                     PromptUserResponse.model_validate(
                         {
-                            **PromptModel.model_validate(prompt).model_dump(),
+                            **self._to_prompt_model(prompt).model_dump(),
                             "user": user.model_dump() if user else None,
                         }
                     )
@@ -266,7 +285,7 @@ class PromptsTable:
                 items.append(
                     PromptUserResponse.model_validate(
                         {
-                            **PromptModel.model_validate(prompt).model_dump(),
+                            **self._to_prompt_model(prompt).model_dump(),
                             "user": user.model_dump() if user else None,
                         }
                     )
@@ -298,6 +317,7 @@ class PromptsTable:
                     return None
 
                 prompt.name = form_data.name
+                prompt.command = self._normalize_command(form_data.command)
                 prompt.content = form_data.content
                 prompt.access_control = form_data.access_control
 
@@ -316,7 +336,7 @@ class PromptsTable:
                 prompt.timestamp = now
 
                 db.commit()
-                return PromptModel.model_validate(prompt)
+                return self._to_prompt_model(prompt)
         except Exception:
             return None
 
@@ -326,11 +346,15 @@ class PromptsTable:
         """Legacy command-based update for backward compatibility."""
         try:
             with get_db() as db:
-                prompt = db.query(Prompt).filter_by(command=command).first()
+                candidates = self._command_candidates(command)
+                if not candidates:
+                    return None
+                prompt = db.query(Prompt).filter(Prompt.command.in_(candidates)).first()
                 if not prompt:
                     return None
 
                 prompt.name = form_data.name
+                prompt.command = self._normalize_command(form_data.command)
                 prompt.content = form_data.content
                 prompt.access_control = form_data.access_control
 
@@ -349,7 +373,7 @@ class PromptsTable:
                 prompt.timestamp = now
 
                 db.commit()
-                return PromptModel.model_validate(prompt)
+                return self._to_prompt_model(prompt)
         except Exception:
             return None
 
@@ -373,7 +397,7 @@ class PromptsTable:
 
                 prompt.updated_at = int(time.time())
                 db.commit()
-                return PromptModel.model_validate(prompt)
+                return self._to_prompt_model(prompt)
         except Exception:
             return None
 
@@ -392,7 +416,7 @@ class PromptsTable:
                 prompt.is_active = is_active
                 prompt.updated_at = int(time.time())
                 db.commit()
-                return PromptModel.model_validate(prompt)
+                return self._to_prompt_model(prompt)
         except Exception:
             return None
 
@@ -402,13 +426,16 @@ class PromptsTable:
         """Legacy command-based toggle."""
         try:
             with get_db() as db:
-                prompt = db.query(Prompt).filter_by(command=command).first()
+                candidates = self._command_candidates(command)
+                if not candidates:
+                    return None
+                prompt = db.query(Prompt).filter(Prompt.command.in_(candidates)).first()
                 if not prompt:
                     return None
                 prompt.is_active = is_active
                 prompt.updated_at = int(time.time())
                 db.commit()
-                return PromptModel.model_validate(prompt)
+                return self._to_prompt_model(prompt)
         except Exception:
             return None
 
@@ -424,7 +451,10 @@ class PromptsTable:
     def delete_prompt_by_command(self, command: str) -> bool:
         try:
             with get_db() as db:
-                db.query(Prompt).filter_by(command=command).delete()
+                candidates = self._command_candidates(command)
+                if not candidates:
+                    return False
+                db.query(Prompt).filter(Prompt.command.in_(candidates)).delete()
                 db.commit()
                 return True
         except Exception:
