@@ -24,6 +24,7 @@
 	import Connection from '$lib/components/chat/Settings/Tools/Connection.svelte';
 	import AddServerModal from '$lib/components/AddServerModal.svelte';
 	import MCPServerModal from '$lib/components/admin/Settings/Tools/MCPServerModal.svelte';
+	import SharedToolAccessModal from '$lib/components/admin/Settings/Tools/SharedToolAccessModal.svelte';
 	import ValvesModal from '$lib/components/workspace/common/ValvesModal.svelte';
 	import HaloSelect from '$lib/components/common/HaloSelect.svelte';
 	import InlineDirtyActions from './InlineDirtyActions.svelte';
@@ -33,10 +34,14 @@
 	import {
 		getToolServerConnections,
 		setToolServerConnections,
+		shareToolServerConnection,
+		unshareToolServerConnection,
 		getNativeToolsConfig,
 		setNativeToolsConfig,
 		getMCPServerConnections,
-		setMCPServerConnections
+		setMCPServerConnections,
+		shareMCPServerConnection,
+		unshareMCPServerConnection
 	} from '$lib/apis/configs';
 
 	import {
@@ -50,6 +55,10 @@
 
 	// ==================== 标签页状态 ====================
 	$: canManageGlobalToolPolicies = !roleAware || $user?.role === 'admin';
+	$: canUseDirectToolServers =
+		!roleAware ||
+		$user?.role === 'admin' ||
+		Boolean($user?.permissions?.features?.direct_tool_servers);
 
 	let selectedTab: 'native' | 'mcp' | 'workspace' | 'openapi' = 'native';
 
@@ -104,8 +113,13 @@
 	};
 
 	$: activeTabMeta = tabMeta[selectedTab];
-	// 非管理员时自动跳到 mcp
-	$: if (!canManageGlobalToolPolicies && selectedTab === 'native') selectedTab = 'mcp';
+	// 非管理员时自动跳过不可用页签
+	$: if (!canManageGlobalToolPolicies && selectedTab === 'native') {
+		selectedTab = canUseDirectToolServers ? 'mcp' : 'workspace';
+	}
+	$: if (!canUseDirectToolServers && (selectedTab === 'mcp' || selectedTab === 'openapi')) {
+		selectedTab = 'workspace';
+	}
 
 	// ==================== 加载状态 ====================
 	let saving = false;
@@ -285,8 +299,16 @@
 		let mcpServers: Array<any> = [];
 		let mcpRuntimeCapabilities: MCPRuntimeCapabilities = buildDefaultMCPRuntimeCapabilities();
 		let mcpRuntimeProfile: MCPRuntimeProfile = 'custom';
-		let showMCPModal = false;
-		let editingMCPServerIndex: number | null = null;
+	let showMCPModal = false;
+	let editingMCPServerIndex: number | null = null;
+	let showSharedToolAccessModal = false;
+	let sharedToolModalTitle = '';
+	let sharedToolModalResourceName = '';
+	let sharedToolModalKind: 'mcp' | 'openapi' = 'mcp';
+	let sharedToolModalIndex: number | null = null;
+	let sharedToolModalAccessControl: any = null;
+	let sharedToolModalShared = false;
+	let sharedToolModalSaving = false;
 
 	const normalizeMCPServer = (server: any) => ({
 		transport_type: server?.transport_type ?? 'http',
@@ -303,6 +325,9 @@
 			...(server?.config ?? {}),
 			enable: server?.config?.enable ?? server?.enabled ?? true
 		},
+		shared_id: server?.shared_id ?? undefined,
+		shared_access_control: server?.shared_access_control ?? null,
+		shared_enabled: server?.shared_enabled ?? false,
 		server_info: server?.server_info ?? undefined,
 		tool_count: server?.tool_count ?? undefined,
 		verified_at: server?.verified_at ?? undefined,
@@ -331,6 +356,11 @@
 	const getMCPHeaderCount = (server: any): number =>
 		Object.keys(server?.headers ?? {}).length;
 
+	const getSharedScopeLabel = (server: any): string => {
+		if (!server?.shared_id) return '';
+		return server?.shared_access_control == null ? '公开' : '受限';
+	};
+
 	const formatVerifiedAt = (value?: string): string => {
 		if (!value) return '';
 		const parsed = new Date(value);
@@ -345,6 +375,9 @@
 		auth_type?: string;
 		key?: string;
 		config?: any;
+		shared_id?: string;
+		shared_access_control?: any;
+		shared_enabled?: boolean;
 	}> = [];
 	let showOpenAPIModal = false;
 
@@ -522,7 +555,13 @@
 
 	const updateMCPServer = async (index: number, server: any) => {
 		const previous = cloneSettingsSnapshot(mcpServers);
-		mcpServers[index] = normalizeMCPServer(server);
+		const current = mcpServers[index] ?? {};
+		mcpServers[index] = normalizeMCPServer({
+			...server,
+			shared_id: current.shared_id,
+			shared_access_control: current.shared_access_control,
+			shared_enabled: current.shared_enabled
+		});
 		mcpServers = mcpServers;
 		const ok = await saveMCPServers();
 		if (!ok) {
@@ -561,6 +600,15 @@
 	};
 
 	// OpenAPI Servers 处理
+	const loadOpenAPIServers = async () => {
+		const res = await getToolServerConnections(localStorage.token).catch(() => {
+			toast.error($i18n.t('加载 OpenAPI 服务器失败'));
+			return null;
+		});
+
+		openAPIServers = res?.TOOL_SERVER_CONNECTIONS || [];
+	};
+
 	const addOpenAPIServer = async (server: {
 		url: string;
 		path: string;
@@ -590,12 +638,95 @@
 		});
 
 		if (res) {
+			openAPIServers = res?.TOOL_SERVER_CONNECTIONS || [];
 			if (!silent) toast.success($i18n.t('OpenAPI 服务器已保存'));
 			toolsStore.set(await getTools(localStorage.token));
 			return true;
 		}
 
 		return false;
+	};
+
+	const canShareOpenAPIServer = (server: any): string | null => {
+		if ((server?.auth_type ?? 'bearer') === 'session') {
+			return '使用 Session 认证的 OpenAPI 工具暂不支持共享，请改用 Bearer 密钥。';
+		}
+		return null;
+	};
+
+	const canShareMCPServer = (server: any): string | null => {
+		if ((server?.transport_type ?? 'http') === 'http' && (server?.auth_type ?? 'none') === 'session') {
+			return '使用 Session 认证的 HTTP MCP 暂不支持共享，请改用 Bearer 或其他固定认证方式。';
+		}
+		return null;
+	};
+
+	const openSharedToolAccessModal = (kind: 'mcp' | 'openapi', index: number) => {
+		const source = kind === 'mcp' ? mcpServers[index] : openAPIServers[index];
+		const reason = kind === 'mcp' ? canShareMCPServer(source) : canShareOpenAPIServer(source);
+		if (reason) {
+			toast.error(reason);
+			return;
+		}
+
+		sharedToolModalKind = kind;
+		sharedToolModalIndex = index;
+		sharedToolModalResourceName =
+			kind === 'mcp'
+				? getServerDisplayName(source)
+				: source?.url || tr('OpenAPI 服务器', 'OpenAPI Server');
+		sharedToolModalTitle = kind === 'mcp' ? '共享 MCP 工具' : '共享 OpenAPI 工具';
+		sharedToolModalAccessControl = source?.shared_access_control ?? null;
+		sharedToolModalShared = Boolean(source?.shared_id && source?.shared_enabled);
+		showSharedToolAccessModal = true;
+	};
+
+	const saveSharedToolAccess = async (accessControl: any) => {
+		if (sharedToolModalIndex === null) return;
+		sharedToolModalSaving = true;
+		try {
+			if (sharedToolModalKind === 'mcp') {
+				await shareMCPServerConnection(localStorage.token, sharedToolModalIndex, {
+					access_control: accessControl
+				});
+				await loadMCPServers();
+			} else {
+				await shareToolServerConnection(localStorage.token, sharedToolModalIndex, {
+					access_control: accessControl
+				});
+				await loadOpenAPIServers();
+			}
+			toolsStore.set(await getTools(localStorage.token));
+			initialSnapshot = cloneSettingsSnapshot(buildSnapshot());
+			showSharedToolAccessModal = false;
+			toast.success('共享设置已保存');
+		} catch (error) {
+			toast.error(`${error}`);
+		} finally {
+			sharedToolModalSaving = false;
+		}
+	};
+
+	const disableSharedToolAccess = async () => {
+		if (sharedToolModalIndex === null) return;
+		sharedToolModalSaving = true;
+		try {
+			if (sharedToolModalKind === 'mcp') {
+				await unshareMCPServerConnection(localStorage.token, sharedToolModalIndex);
+				await loadMCPServers();
+			} else {
+				await unshareToolServerConnection(localStorage.token, sharedToolModalIndex);
+				await loadOpenAPIServers();
+			}
+			toolsStore.set(await getTools(localStorage.token));
+			initialSnapshot = cloneSettingsSnapshot(buildSnapshot());
+			showSharedToolAccessModal = false;
+			toast.success('共享已关闭');
+		} catch (error) {
+			toast.error(`${error}`);
+		} finally {
+			sharedToolModalSaving = false;
+		}
 	};
 
 	// ==================== 提交处理 ====================
@@ -607,8 +738,10 @@
 			const okNative = canManageGlobalToolPolicies
 				? await saveNativeToolsConfig({ silent: true })
 				: true;
-			const okMCP = await saveMCPServers({ silent: true });
-			const okOpenAPI = await saveOpenAPIServers({ silent: true });
+			const okMCP = canUseDirectToolServers ? await saveMCPServers({ silent: true }) : true;
+			const okOpenAPI = canUseDirectToolServers
+				? await saveOpenAPIServers({ silent: true })
+				: true;
 
 			if (okNative && okMCP && okOpenAPI) {
 				initialSnapshot = cloneSettingsSnapshot(buildSnapshot());
@@ -624,16 +757,23 @@
 	// ==================== 初始化 ====================
 	onMount(async () => {
 		try {
-			// 并行加载所有配置（4个请求无依赖关系）
-			const [nativeRes, toolServerRes] = await Promise.all([
+			// 并行加载所有配置（仅在当前用户可访问时加载直连工具）
+			const [nativeRes] = await Promise.all([
 				getNativeToolsConfig(localStorage.token).catch(() => null),
-				getToolServerConnections(localStorage.token).catch(() => ({ TOOL_SERVER_CONNECTIONS: [] })),
 				loadWorkspaceTools(),
-				loadMCPServers()
+				canUseDirectToolServers
+					? loadMCPServers()
+					: Promise.resolve().then(() => {
+							mcpServers = [];
+						}),
+				canUseDirectToolServers
+					? loadOpenAPIServers()
+					: Promise.resolve().then(() => {
+							openAPIServers = [];
+						})
 			]);
 
 			nativeToolsConfig = normalizeNativeToolsConfig(nativeRes);
-			openAPIServers = toolServerRes.TOOL_SERVER_CONNECTIONS || [];
 
 			// 创建初始快照
 			initialSnapshot = cloneSettingsSnapshot(buildSnapshot());
@@ -679,6 +819,17 @@
 			}}
 		/>
 	{/if}
+
+<SharedToolAccessModal
+	bind:show={showSharedToolAccessModal}
+	title={sharedToolModalTitle}
+	resourceName={sharedToolModalResourceName}
+	accessControl={sharedToolModalAccessControl}
+	isShared={sharedToolModalShared}
+	saving={sharedToolModalSaving}
+	onSubmit={saveSharedToolAccess}
+	onDisable={disableSharedToolAccess}
+/>
 
 <!-- OpenAPI Server Modal -->
 <AddServerModal bind:show={showOpenAPIModal} onSubmit={addOpenAPIServer} />
@@ -757,26 +908,30 @@
 										<span class="min-w-0 truncate">{tr('内置功能', 'Built-in Features')}</span>
 									</button>
 								{/if}
-								<button type="button" class={`flex min-w-0 items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition-all ${selectedTab === 'mcp' ? 'bg-white text-gray-900 shadow-sm dark:bg-gray-800 dark:text-white' : 'text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200'}`} on:click={() => { selectedTab = 'mcp'; }}>
-									<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180" fill="none" stroke="currentColor" stroke-width="12" stroke-linecap="round" class="size-4">
-										<path d="M18 84.8528L85.8822 16.9706C95.2548 7.59798 110.451 7.59798 119.823 16.9706C129.196 26.3431 129.196 41.5391 119.823 50.9117L68.5581 102.177" />
-										<path d="M69.2652 101.47L119.823 50.9117C129.196 41.5391 144.392 41.5391 153.765 50.9117L154.118 51.2652C163.491 60.6378 163.491 75.8338 154.118 85.2063L92.7248 146.6C89.6006 149.724 89.6006 154.789 92.7248 157.913L105.331 170.52" />
-										<path d="M102.853 33.9411L52.6482 84.1457C43.2756 93.5183 43.2756 108.714 52.6482 118.087C62.0208 127.459 77.2167 127.459 86.5893 118.087L136.794 67.8822" />
-									</svg>
-									<span class="min-w-0 truncate">{$i18n.t('MCP')}</span>
-								</button>
+								{#if canUseDirectToolServers}
+									<button type="button" class={`flex min-w-0 items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition-all ${selectedTab === 'mcp' ? 'bg-white text-gray-900 shadow-sm dark:bg-gray-800 dark:text-white' : 'text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200'}`} on:click={() => { selectedTab = 'mcp'; }}>
+										<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180" fill="none" stroke="currentColor" stroke-width="12" stroke-linecap="round" class="size-4">
+											<path d="M18 84.8528L85.8822 16.9706C95.2548 7.59798 110.451 7.59798 119.823 16.9706C129.196 26.3431 129.196 41.5391 119.823 50.9117L68.5581 102.177" />
+											<path d="M69.2652 101.47L119.823 50.9117C129.196 41.5391 144.392 41.5391 153.765 50.9117L154.118 51.2652C163.491 60.6378 163.491 75.8338 154.118 85.2063L92.7248 146.6C89.6006 149.724 89.6006 154.789 92.7248 157.913L105.331 170.52" />
+											<path d="M102.853 33.9411L52.6482 84.1457C43.2756 93.5183 43.2756 108.714 52.6482 118.087C62.0208 127.459 77.2167 127.459 86.5893 118.087L136.794 67.8822" />
+										</svg>
+										<span class="min-w-0 truncate">{$i18n.t('MCP')}</span>
+									</button>
+								{/if}
 								<button type="button" class={`flex min-w-0 items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition-all ${selectedTab === 'workspace' ? 'bg-white text-gray-900 shadow-sm dark:bg-gray-800 dark:text-white' : 'text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200'}`} on:click={() => { selectedTab = 'workspace'; }}>
 									<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-4">
 										<path stroke-linecap="round" stroke-linejoin="round" d="M20.25 14.15v4.25c0 1.094-.787 2.036-1.872 2.18-2.087.277-4.216.42-6.378.42s-4.291-.143-6.378-.42c-1.085-.144-1.872-1.086-1.872-2.18v-4.25m16.5 0a2.18 2.18 0 0 0 .75-1.661V8.706c0-1.081-.768-2.015-1.837-2.175a48.114 48.114 0 0 0-3.413-.387m4.5 8.006c-.194.165-.42.295-.673.38A23.978 23.978 0 0 1 12 15.75c-2.648 0-5.195-.429-7.577-1.22a2.016 2.016 0 0 1-.673-.38m0 0A2.18 2.18 0 0 1 3 12.489V8.706c0-1.081.768-2.015 1.837-2.175a48.111 48.111 0 0 1 3.413-.387m7.5 0V5.25A2.25 2.25 0 0 0 13.5 3h-3a2.25 2.25 0 0 0-2.25 2.25v.894m7.5 0a48.667 48.667 0 0 0-7.5 0" />
 									</svg>
 									<span class="min-w-0 truncate">{tr('工作空间', 'Workspace')}</span>
 								</button>
-								<button type="button" class={`flex min-w-0 items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition-all ${selectedTab === 'openapi' ? 'bg-white text-gray-900 shadow-sm dark:bg-gray-800 dark:text-white' : 'text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200'}`} on:click={() => { selectedTab = 'openapi'; }}>
-									<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-4">
-										<path stroke-linecap="round" stroke-linejoin="round" d="M21.75 17.25v-.228a4.5 4.5 0 0 0-.12-1.03l-2.268-9.64a3.375 3.375 0 0 0-3.285-2.602H7.923a3.375 3.375 0 0 0-3.285 2.602l-2.268 9.64a4.5 4.5 0 0 0-.12 1.03v.228m19.5 0a3 3 0 0 1-3 3H5.25a3 3 0 0 1-3-3m19.5 0a3 3 0 0 0-3-3H5.25a3 3 0 0 0-3 3m16.5 0h.008v.008h-.008v-.008Zm-3 0h.008v.008h-.008v-.008Z" />
-									</svg>
-									<span class="min-w-0 truncate">{$i18n.t('OpenAPI')}</span>
-								</button>
+								{#if canUseDirectToolServers}
+									<button type="button" class={`flex min-w-0 items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition-all ${selectedTab === 'openapi' ? 'bg-white text-gray-900 shadow-sm dark:bg-gray-800 dark:text-white' : 'text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200'}`} on:click={() => { selectedTab = 'openapi'; }}>
+										<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-4">
+											<path stroke-linecap="round" stroke-linejoin="round" d="M21.75 17.25v-.228a4.5 4.5 0 0 0-.12-1.03l-2.268-9.64a3.375 3.375 0 0 0-3.285-2.602H7.923a3.375 3.375 0 0 0-3.285 2.602l-2.268 9.64a4.5 4.5 0 0 0-.12 1.03v.228m19.5 0a3 3 0 0 1-3 3H5.25a3 3 0 0 1-3-3m19.5 0a3 3 0 0 0-3-3H5.25a3 3 0 0 0-3 3m16.5 0h.008v.008h-.008v-.008Zm-3 0h.008v.008h-.008v-.008Z" />
+										</svg>
+										<span class="min-w-0 truncate">{$i18n.t('OpenAPI')}</span>
+									</button>
+								{/if}
 							</div>
 						</div>
 					</div>
@@ -1182,6 +1337,18 @@
 															? $i18n.t('已验证')
 															: $i18n.t('未验证')}
 													</span>
+													{#if server.shared_id}
+														<span
+															class="px-1.5 py-0.5 text-xs rounded bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 shrink-0"
+														>
+															{server.shared_enabled ? '共享中' : '已停止共享'}
+														</span>
+														<span
+															class="px-1.5 py-0.5 text-xs rounded bg-slate-100 dark:bg-slate-800/70 text-slate-600 dark:text-slate-300 shrink-0"
+														>
+															{getSharedScopeLabel(server)}
+														</span>
+													{/if}
 												</div>
 												<div class="text-xs text-gray-400 dark:text-gray-500 mt-0.5 truncate ml-4">
 													{getMCPPrimaryValue(server)}
@@ -1230,6 +1397,28 @@
 														</svg>
 													</button>
 												</Tooltip>
+												{#if $user?.role === 'admin'}
+													<Tooltip content={server.shared_enabled ? '共享设置' : '开启共享'}>
+														<button
+															class="p-1.5 rounded-lg transition {server.shared_enabled
+																? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-950/30 dark:text-emerald-300 dark:hover:bg-emerald-950/50'
+																: 'hover:bg-gray-200 dark:hover:bg-gray-700'}"
+															type="button"
+															on:click={() => {
+																openSharedToolAccessModal('mcp', idx);
+															}}
+														>
+															<svg
+																xmlns="http://www.w3.org/2000/svg"
+																viewBox="0 0 20 20"
+																fill="currentColor"
+																class="size-4"
+															>
+																<path d="M15 8a3 3 0 1 0-2.83-4H12a3 3 0 0 0 .17 1l-4.6 2.3a3 3 0 0 0-2.4-1.2 3 3 0 1 0 0 6c.87 0 1.66-.37 2.2-.95l4.8 2.4A3 3 0 0 0 12 15a3 3 0 1 0 .17-1l-4.8-2.4A2.98 2.98 0 0 0 8 10c0-.35-.06-.68-.17-.99l4.6-2.3c.54.79 1.45 1.3 2.47 1.3Z" />
+															</svg>
+														</button>
+													</Tooltip>
+												{/if}
 												<Tooltip content={$i18n.t('删除')}>
 													<button
 														class="p-1.5 rounded-lg hover:bg-red-100 dark:hover:bg-red-900/30 text-red-600 dark:text-red-400 transition"
@@ -1602,7 +1791,20 @@
 									{#each openAPIServers as server, idx}
 										<Connection
 											bind:connection={server}
-											onSubmit={() => {
+											showShareAction={$user?.role === 'admin'}
+											shareActive={Boolean(server.shared_id && server.shared_enabled)}
+											shareScopeLabel={getSharedScopeLabel(server)}
+											onShare={() => {
+												openSharedToolAccessModal('openapi', idx);
+											}}
+											onSubmit={(connection) => {
+												openAPIServers[idx] = {
+													...connection,
+													shared_id: server.shared_id,
+													shared_access_control: server.shared_access_control,
+													shared_enabled: server.shared_enabled
+												};
+												openAPIServers = openAPIServers;
 												updateOpenAPIServer();
 											}}
 											onDelete={() => {

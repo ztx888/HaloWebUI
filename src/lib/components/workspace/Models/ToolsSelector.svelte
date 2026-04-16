@@ -40,7 +40,21 @@
 							selectedToolIds = Object.keys(_tools).filter((t) => _tools[t].selected);
 						}}
 					/>
-					<span class="text-sm capitalize font-medium">{_tools[tool].name}</span>
+					<div class="min-w-0">
+						<div class="flex items-center gap-1.5">
+							<span class="text-sm capitalize font-medium truncate">{_tools[tool].name}</span>
+							{#if _tools[tool]?.meta?.source === 'shared'}
+								<span class="shrink-0 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300">
+									共享
+								</span>
+							{/if}
+						</div>
+						{#if _tools[tool]?.meta?.source === 'shared' && _tools[tool]?.meta?.owner_name}
+							<div class="text-[11px] text-gray-500 dark:text-gray-400">
+								管理员：{_tools[tool].meta.owner_name}
+							</div>
+						{/if}
+					</div>
 				</label>
 			{/each}
 		</div>

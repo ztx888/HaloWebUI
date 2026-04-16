@@ -38,6 +38,7 @@
 		stripThinkingBlocks
 	} from '$lib/utils';
 	import { WEBUI_BASE_URL } from '$lib/constants';
+	import { translateWithDefault } from '$lib/i18n';
 
 	import Name from './Name.svelte';
 	import ModelIcon from '$lib/components/common/ModelIcon.svelte';
@@ -145,6 +146,8 @@
 
 	let message: MessageType = history.messages?.[messageId] as MessageType;
 	$: message = history.messages?.[messageId] as MessageType;
+	const tr = (key: string, defaultValue: string, options: Record<string, any> = {}) =>
+		translateWithDefault($i18n, key, defaultValue, options);
 
 	function getVisibleAssistantOutput(content: string): string {
 		return sanitizeResponseContent(
@@ -672,19 +675,17 @@
 
 		const num = (v: unknown) => (typeof v === 'number' ? v.toLocaleString() : null);
 		const rows: [string, string | null][] = [
-			[$i18n.t('输入 Token', { defaultValue: 'Input Tokens' }), num(input)],
-			[$i18n.t('输出 Token', { defaultValue: 'Output Tokens' }), num(output)],
-			[$i18n.t('推理 Token', { defaultValue: 'Reasoning Tokens' }), num(reasoning)],
-			[$i18n.t('缓存 Token', { defaultValue: 'Cached Tokens' }), num(cached)]
+			[tr('输入 Token', 'Input Tokens'), num(input)],
+			[tr('输出 Token', 'Output Tokens'), num(output)],
+			[tr('推理 Token', 'Reasoning Tokens'), num(reasoning)],
+			[tr('缓存 Token', 'Cached Tokens'), num(cached)]
 		];
 
 		let h = `<div style="background:${bg};backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border:1px solid ${bd};border-radius:1rem;padding:10px 14px;box-shadow:0 10px 15px -3px rgba(0,0,0,0.1);min-width:150px">`;
 
 		if (typeof total === 'number') {
 			h += `<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid ${dv}">`;
-			h += `<span style="font-size:12px;font-weight:500;color:${lb}">${$i18n.t('总消耗', {
-				defaultValue: 'Total'
-			})}</span>`;
+			h += `<span style="font-size:12px;font-weight:500;color:${lb}">${tr('总消耗', 'Total')}</span>`;
 			h += `<span style="font-size:18px;font-weight:600;font-variant-numeric:tabular-nums;color:${hr}">${total.toLocaleString()}</span>`;
 			h += `</div>`;
 		}
@@ -695,9 +696,7 @@
 			h += `<span style="color:${lb}">${label}</span>`;
 			h += val !== null
 				? `<span style="font-weight:500;font-variant-numeric:tabular-nums;color:${vl}">${val}</span>`
-				: `<span style="color:${vl};font-style:italic">${$i18n.t('未返回', {
-					defaultValue: 'Not returned'
-				})}</span>`;
+				: `<span style="color:${vl};font-style:italic">${tr('未返回', 'Not returned')}</span>`;
 			h += `</div>`;
 		}
 		h += `</div></div>`;
@@ -859,8 +858,8 @@
 
 			{#if stats && (stats.speed || stats.tokens || stats.elapsed)}
 				<div class="text-gray-500 dark:text-gray-400 mt-1 ml-0.5 text-xs sm:text-sm">
-					{#if stats.speed}{$i18n.t('速度', { defaultValue: 'Speed' })}: {stats.speed} T/s{/if}{#if stats.speed && (stats.tokens || stats.elapsed)}{' | '}{/if}{#if stats.tokens}{$i18n.t('消耗', { defaultValue: 'Tokens' })}:
-						{stats.tokens} Token{/if}{#if stats.tokens && stats.elapsed}{' | '}{/if}{#if stats.elapsed}{$i18n.t('耗时', { defaultValue: 'Elapsed' })}:
+					{#if stats.speed}{tr('速度', 'Speed')}: {stats.speed} T/s{/if}{#if stats.speed && (stats.tokens || stats.elapsed)}{' | '}{/if}{#if stats.tokens}{tr('消耗', 'Tokens')}:
+						{stats.tokens} {$i18n.t('Token')}{/if}{#if stats.tokens && stats.elapsed}{' | '}{/if}{#if stats.elapsed}{tr('耗时', 'Elapsed')}:
 						{stats.elapsed} s{/if}
 				</div>
 			{/if}

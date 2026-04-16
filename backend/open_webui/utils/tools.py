@@ -1,7 +1,6 @@
 import inspect
 import logging
 import re
-import inspect
 import aiohttp
 import asyncio
 import yaml
@@ -40,22 +39,45 @@ from open_webui.utils.access_control import can_read_resource
 from open_webui.utils.plugin import load_tool_module_by_id
 from open_webui.env import AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER_DATA
 from open_webui.utils.mcp import execute_mcp_tool
+from open_webui.utils.shared_tool_servers import (
+    MCP_SHARED_TOOL_PREFIX,
+    OPENAPI_SHARED_TOOL_PREFIX,
+    can_use_direct_tool_servers,
+    validate_requested_shared_tool_ids_access,
+)
 
 import copy
 
 log = logging.getLogger(__name__)
 
 
-def validate_tool_ids_access(tool_ids: list[str] | None, user: UserModel) -> None:
+def validate_tool_ids_access(
+    tool_ids: list[str] | None,
+    user: UserModel,
+    request: Optional[Request] = None,
+) -> None:
     if not tool_ids:
         return
 
     missing_tool_ids: list[str] = []
     denied_tool_ids: list[str] = []
 
+    if request is not None:
+        validate_requested_shared_tool_ids_access(request, tool_ids, user)
+        if any(
+            str(tool_id or "").strip().startswith(("server:", "mcp:"))
+            for tool_id in tool_ids
+        ) and not can_use_direct_tool_servers(request, user):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
+            )
+
     for tool_id in tool_ids:
         tool_id = str(tool_id or "").strip()
-        if not tool_id or tool_id.startswith(("server:", "mcp:")):
+        if not tool_id or tool_id.startswith(
+            ("server:", "mcp:", OPENAPI_SHARED_TOOL_PREFIX, MCP_SHARED_TOOL_PREFIX)
+        ):
             continue
 
         tool = Tools.get_tool_by_id(tool_id)
@@ -87,6 +109,221 @@ def validate_tool_ids_access(tool_ids: list[str] | None, user: UserModel) -> Non
             status_code=status.HTTP_404_NOT_FOUND,
             detail=ERROR_MESSAGES.NOT_FOUND,
         )
+
+
+def _get_shared_tool_server_runtime_entry(
+    request: Request, shared_id: str
+) -> tuple[Optional[dict], Optional[dict]]:
+    shared_connections = (
+        getattr(getattr(request, "state", None), "SHARED_TOOL_SERVER_CONNECTIONS", None)
+        or {}
+    )
+    shared_servers = (
+        getattr(getattr(request, "state", None), "SHARED_TOOL_SERVERS", None) or {}
+    )
+    return shared_connections.get(shared_id), shared_servers.get(shared_id)
+
+
+def _get_shared_mcp_runtime_entry(
+    request: Request, shared_id: str
+) -> tuple[Optional[dict], Optional[dict]]:
+    shared_connections = (
+        getattr(getattr(request, "state", None), "SHARED_MCP_SERVER_CONNECTIONS", None)
+        or {}
+    )
+    shared_servers = (
+        getattr(getattr(request, "state", None), "SHARED_MCP_SERVERS", None) or {}
+    )
+    return shared_connections.get(shared_id), shared_servers.get(shared_id)
+
+
+def _make_openapi_tool_runtime(
+    request: Request,
+    tool_id: str,
+    tool_server_connection: dict,
+    tool_server_data: dict,
+) -> dict[str, dict]:
+    tools_dict: dict[str, dict] = {}
+    specs = tool_server_data.get("specs", [])
+
+    for spec in specs:
+        function_name = spec["name"]
+
+        auth_type = tool_server_connection.get("auth_type", "bearer")
+        token = None
+
+        if auth_type == "bearer":
+            token = tool_server_connection.get("key", "")
+        elif auth_type == "session":
+            token = request.state.token.credentials
+
+        def make_tool_function(function_name, token, tool_server_data):
+            async def tool_function(**kwargs):
+                return await execute_tool_server(
+                    token=token,
+                    url=tool_server_data["url"],
+                    name=function_name,
+                    params=kwargs,
+                    server_data=tool_server_data,
+                )
+
+            return tool_function
+
+        tool_function = make_tool_function(function_name, token, tool_server_data)
+        callable = get_async_tool_function_and_apply_extra_params(tool_function, {})
+
+        tool_dict = {
+            "tool_id": tool_id,
+            "callable": callable,
+            "spec": spec,
+        }
+
+        if function_name in tools_dict:
+            log.warning(f"Tool {function_name} already exists in another tools!")
+            log.warning(f"Discarding {tool_id}.{function_name}")
+        else:
+            tools_dict[function_name] = tool_dict
+
+    return tools_dict
+
+
+def _merge_tool_runtime_entries(
+    tools_dict: dict[str, dict], next_entries: dict[str, dict], tool_id: str
+) -> None:
+    for function_name, tool_dict in next_entries.items():
+        if function_name in tools_dict:
+            log.warning(f"Tool {function_name} already exists in another tools!")
+            log.warning(f"Discarding {tool_id}.{function_name}")
+            continue
+        tools_dict[function_name] = tool_dict
+
+
+def _make_mcp_tool_runtime(
+    request: Request,
+    user: UserModel,
+    extra_params: dict,
+    tool_id: str,
+    mcp_server_connection: dict,
+    mcp_server_data: dict,
+    *,
+    metadata_server_id: Any,
+) -> dict[str, dict]:
+    tools_dict: dict[str, dict] = {}
+
+    def sanitize_tool_name(name: str) -> str:
+        sanitized = re.sub(r"[^a-zA-Z0-9_]+", "_", name or "").strip("_")
+        if not sanitized:
+            sanitized = "tool"
+        if not re.match(r"^[a-zA-Z_]", sanitized):
+            sanitized = f"tool_{sanitized}"
+        return sanitized
+
+    def make_mcp_function_name(server_identifier: Any, tool_name: str) -> str:
+        identifier = sanitize_tool_name(str(server_identifier))
+        base = f"mcp_{identifier}__{sanitize_tool_name(tool_name)}"
+        if len(base) > 64:
+            base = base[:64]
+        return base
+
+    for mcp_tool in mcp_server_data.get("tools", []) or []:
+        original_tool_name = mcp_tool.get("name") or ""
+        function_name = make_mcp_function_name(metadata_server_id, original_tool_name)
+
+        input_schema = mcp_tool.get("inputSchema") or {}
+        if not isinstance(input_schema, dict):
+            input_schema = {}
+        if input_schema.get("type") != "object":
+            input_schema = {"type": "object", "properties": {}}
+
+        spec = {
+            "name": function_name,
+            "description": mcp_tool.get("description")
+            or original_tool_name
+            or function_name,
+            "parameters": input_schema,
+        }
+
+        def make_tool_function(original_tool_name, mcp_server_connection):
+            async def tool_function(__event_emitter__=None, **kwargs):
+                notif_cb = None
+                if __event_emitter__ is not None:
+
+                    async def notif_cb(notification):
+                        method = notification.get("method", "")
+                        params = notification.get("params") or {}
+                        if method == "notifications/progress":
+                            progress = params.get("progress")
+                            total = params.get("total")
+                            desc = f"MCP: {original_tool_name}"
+                            if total:
+                                desc = f"MCP: {original_tool_name} ({progress}/{total})"
+                            await __event_emitter__(
+                                {
+                                    "type": "status",
+                                    "data": {
+                                        "action": "mcp_progress",
+                                        "description": desc,
+                                        "done": False,
+                                    },
+                                }
+                            )
+                        elif method == "notifications/message":
+                            level = params.get("level", "info")
+                            data_val = params.get("data", "")
+                            await __event_emitter__(
+                                {
+                                    "type": "status",
+                                    "data": {
+                                        "action": "mcp_message",
+                                        "description": str(data_val),
+                                        "level": level,
+                                        "done": False,
+                                    },
+                                }
+                            )
+
+                return await execute_mcp_tool(
+                    mcp_server_connection,
+                    name=original_tool_name,
+                    arguments=kwargs,
+                    session_token=getattr(
+                        getattr(request, "state", None),
+                        "token",
+                        None,
+                    ).credentials
+                    if getattr(getattr(request, "state", None), "token", None)
+                    else None,
+                    user_id=getattr(user, "id", None),
+                    on_notification=notif_cb,
+                )
+
+            return tool_function
+
+        tool_function = make_tool_function(original_tool_name, mcp_server_connection)
+        callable = get_async_tool_function_and_apply_extra_params(
+            tool_function,
+            extra_params,
+        )
+
+        tool_dict = {
+            "tool_id": tool_id,
+            "callable": callable,
+            "spec": spec,
+            "metadata": {
+                "mcp": {
+                    "server_idx": metadata_server_id,
+                    "tool_name": original_tool_name,
+                }
+            },
+        }
+
+        if function_name in tools_dict:
+            log.warning(f"Tool {function_name} already exists in another tools!")
+            log.warning(f"Discarding {tool_id}.{function_name}")
+        else:
+            tools_dict[function_name] = tool_dict
+
+    return tools_dict
 
 
 def get_async_tool_function_and_apply_extra_params(
@@ -151,54 +388,37 @@ def get_tools(
                         f"Tool server data not loaded for idx={server_idx}; skipping {tool_id}"
                     )
                     continue
-                specs = tool_server_data.get("specs", [])
-
-                for spec in specs:
-                    function_name = spec["name"]
-
-                    auth_type = tool_server_connection.get("auth_type", "bearer")
-                    token = None
-
-                    if auth_type == "bearer":
-                        token = tool_server_connection.get("key", "")
-                    elif auth_type == "session":
-                        token = request.state.token.credentials
-
-                    def make_tool_function(function_name, token, tool_server_data):
-                        async def tool_function(**kwargs):
-                            return await execute_tool_server(
-                                token=token,
-                                url=tool_server_data["url"],
-                                name=function_name,
-                                params=kwargs,
-                                server_data=tool_server_data,
-                            )
-
-                        return tool_function
-
-                    tool_function = make_tool_function(
-                        function_name, token, tool_server_data
+                _merge_tool_runtime_entries(
+                    tools_dict,
+                    _make_openapi_tool_runtime(
+                        request,
+                        tool_id,
+                        tool_server_connection,
+                        tool_server_data,
+                    ),
+                    tool_id,
+                )
+            elif tool_id.startswith(OPENAPI_SHARED_TOOL_PREFIX):
+                shared_id = tool_id[len(OPENAPI_SHARED_TOOL_PREFIX) :].strip()
+                tool_server_connection, tool_server_data = _get_shared_tool_server_runtime_entry(
+                    request, shared_id
+                )
+                if tool_server_connection is None or tool_server_data is None:
+                    log.warning(
+                        f"Shared OpenAPI tool server data not loaded for id={shared_id}; skipping {tool_id}"
                     )
+                    continue
 
-                    callable = get_async_tool_function_and_apply_extra_params(
-                        tool_function,
-                        {},
-                    )
-
-                    tool_dict = {
-                        "tool_id": tool_id,
-                        "callable": callable,
-                        "spec": spec,
-                    }
-
-                    # TODO: if collision, prepend toolkit name
-                    if function_name in tools_dict:
-                        log.warning(
-                            f"Tool {function_name} already exists in another tools!"
-                        )
-                        log.warning(f"Discarding {tool_id}.{function_name}")
-                    else:
-                        tools_dict[function_name] = tool_dict
+                _merge_tool_runtime_entries(
+                    tools_dict,
+                    _make_openapi_tool_runtime(
+                        request,
+                        tool_id,
+                        tool_server_connection,
+                        tool_server_data,
+                    ),
+                    tool_id,
+                )
             elif tool_id.startswith("mcp:"):
                 try:
                     server_idx = int(tool_id.split(":")[1])
@@ -233,129 +453,43 @@ def get_tools(
                         f"MCP server data not loaded for idx={server_idx}; skipping {tool_id}"
                     )
                     continue
-
-                def sanitize_tool_name(name: str) -> str:
-                    # OpenAI function names are strict; keep it conservative.
-                    sanitized = re.sub(r"[^a-zA-Z0-9_]+", "_", name or "").strip("_")
-                    if not sanitized:
-                        sanitized = "tool"
-                    if not re.match(r"^[a-zA-Z_]", sanitized):
-                        sanitized = f"tool_{sanitized}"
-                    return sanitized
-
-                def make_mcp_function_name(server_idx: int, tool_name: str) -> str:
-                    base = f"mcp_{server_idx}__{sanitize_tool_name(tool_name)}"
-                    # Keep names reasonably short for providers enforcing 64-char limits.
-                    if len(base) > 64:
-                        base = base[:64]
-                    return base
-
-                for mcp_tool in mcp_server_data.get("tools", []) or []:
-                    original_tool_name = mcp_tool.get("name") or ""
-                    function_name = make_mcp_function_name(
-                        server_idx, original_tool_name
-                    )
-
-                    input_schema = mcp_tool.get("inputSchema") or {}
-                    if not isinstance(input_schema, dict):
-                        input_schema = {}
-                    if input_schema.get("type") != "object":
-                        # MCP tool schemas are JSON Schema; OpenAI expects an object schema.
-                        input_schema = {"type": "object", "properties": {}}
-
-                    spec = {
-                        "name": function_name,
-                        "description": mcp_tool.get("description")
-                        or original_tool_name
-                        or function_name,
-                        "parameters": input_schema,
-                    }
-
-                    def make_tool_function(original_tool_name, mcp_server_connection):
-                        async def tool_function(__event_emitter__=None, **kwargs):
-                            # Build a notification callback that relays MCP progress
-                            # notifications to the WebUI event emitter.
-                            notif_cb = None
-                            if __event_emitter__ is not None:
-                                async def notif_cb(notification):
-                                    method = notification.get("method", "")
-                                    params = notification.get("params") or {}
-                                    if method == "notifications/progress":
-                                        progress = params.get("progress")
-                                        total = params.get("total")
-                                        desc = f"MCP: {original_tool_name}"
-                                        if total:
-                                            desc = f"MCP: {original_tool_name} ({progress}/{total})"
-                                        await __event_emitter__(
-                                            {
-                                                "type": "status",
-                                                "data": {
-                                                    "action": "mcp_progress",
-                                                    "description": desc,
-                                                    "done": False,
-                                                },
-                                            }
-                                        )
-                                    elif method == "notifications/message":
-                                        level = params.get("level", "info")
-                                        data_val = params.get("data", "")
-                                        await __event_emitter__(
-                                            {
-                                                "type": "status",
-                                                "data": {
-                                                    "action": "mcp_message",
-                                                    "description": str(data_val),
-                                                    "level": level,
-                                                    "done": False,
-                                                },
-                                            }
-                                        )
-
-                            return await execute_mcp_tool(
-                                mcp_server_connection,
-                                name=original_tool_name,
-                                arguments=kwargs,
-                                session_token=getattr(
-                                    getattr(request, "state", None),
-                                    "token",
-                                    None,
-                                ).credentials
-                                if getattr(getattr(request, "state", None), "token", None)
-                                else None,
-                                user_id=getattr(user, "id", None),
-                                on_notification=notif_cb,
-                            )
-
-                        return tool_function
-
-                    tool_function = make_tool_function(
-                        original_tool_name, mcp_server_connection
-                    )
-                    callable = get_async_tool_function_and_apply_extra_params(
-                        tool_function,
+                _merge_tool_runtime_entries(
+                    tools_dict,
+                    _make_mcp_tool_runtime(
+                        request,
+                        user,
                         extra_params,
+                        tool_id,
+                        mcp_server_connection,
+                        mcp_server_data,
+                        metadata_server_id=server_idx,
+                    ),
+                    tool_id,
+                )
+            elif tool_id.startswith(MCP_SHARED_TOOL_PREFIX):
+                shared_id = tool_id[len(MCP_SHARED_TOOL_PREFIX) :].strip()
+                mcp_server_connection, mcp_server_data = _get_shared_mcp_runtime_entry(
+                    request, shared_id
+                )
+                if mcp_server_connection is None or mcp_server_data is None:
+                    log.warning(
+                        f"Shared MCP server data not loaded for id={shared_id}; skipping {tool_id}"
                     )
+                    continue
 
-                    tool_dict = {
-                        "tool_id": tool_id,
-                        "callable": callable,
-                        "spec": spec,
-                        "metadata": {
-                            "mcp": {
-                                "server_idx": server_idx,
-                                "tool_name": original_tool_name,
-                            }
-                        },
-                    }
-
-                    # Avoid collisions with other tools.
-                    if function_name in tools_dict:
-                        log.warning(
-                            f"Tool {function_name} already exists in another tools!"
-                        )
-                        log.warning(f"Discarding {tool_id}.{function_name}")
-                    else:
-                        tools_dict[function_name] = tool_dict
+                _merge_tool_runtime_entries(
+                    tools_dict,
+                    _make_mcp_tool_runtime(
+                        request,
+                        user,
+                        extra_params,
+                        tool_id,
+                        mcp_server_connection,
+                        mcp_server_data,
+                        metadata_server_id=f"shared_{shared_id}",
+                    ),
+                    tool_id,
+                )
             else:
                 continue
         else:

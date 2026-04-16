@@ -139,6 +139,9 @@ from open_webui.utils.filter import (
     get_sorted_filters,
     process_filter_functions,
 )
+from open_webui.utils.shared_tool_runtime import (
+    ensure_selected_shared_tool_runtime_loaded,
+)
 from open_webui.utils.code_interpreter import execute_code_jupyter
 
 from open_webui.tasks import create_task, set_current_task_blocks_completion
@@ -3105,7 +3108,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     tool_calling_disabled = metadata.get("tool_calling_mode") == "off"
 
     if tool_ids and not tool_calling_disabled:
-        validate_tool_ids_access(tool_ids, user)
+        validate_tool_ids_access(tool_ids, user, request)
 
         # Ensure server-side toolkits are loaded before resolving tool_ids into callable specs.
         # This keeps /api/chat/completions robust even if /api/tools hasn't been called yet.
@@ -3146,6 +3149,8 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                     selected_indices=selected_mcp_indices,
                     strict_selected=True,
                 )
+
+        await ensure_selected_shared_tool_runtime_loaded(request, user, tool_ids)
 
         tools_dict = get_tools(
             request,

@@ -54,6 +54,11 @@ class Tool(Base):
 class ToolMeta(BaseModel):
     description: Optional[str] = None
     manifest: Optional[dict] = {}
+    source: Optional[str] = None
+    owner_name: Optional[str] = None
+    shared_kind: Optional[str] = None
+
+    model_config = ConfigDict(extra="allow")
 
 
 class ToolModel(BaseModel):

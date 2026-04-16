@@ -44,6 +44,9 @@ from open_webui.utils.user_tools import (
     get_user_tool_server_connections,
 )
 from open_webui.utils.access_control import has_access
+from open_webui.utils.shared_tool_runtime import (
+    ensure_selected_shared_tool_runtime_loaded,
+)
 
 from open_webui.env import SRC_LOG_LEVELS, GLOBAL_LOG_LEVEL
 
@@ -224,7 +227,7 @@ async def generate_function_chat_completion(
     if tool_ids is None:
         tool_ids = []
 
-    validate_tool_ids_access(tool_ids, user)
+    validate_tool_ids_access(tool_ids, user, request)
 
     # Ensure per-user server-side toolkits (OpenAPI / MCP) are loaded before resolving tool_ids.
     # This mirrors open_webui.utils.middleware behavior but for function pipes.
@@ -269,6 +272,8 @@ async def generate_function_chat_completion(
                     selected_indices=selected_mcp_indices,
                     strict_selected=True,
                 )
+
+        await ensure_selected_shared_tool_runtime_loaded(request, user, tool_ids)
 
     __event_emitter__ = None
     __event_call__ = None

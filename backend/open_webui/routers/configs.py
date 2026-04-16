@@ -1,4 +1,5 @@
 import asyncio
+from copy import deepcopy
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Request, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -8,6 +9,7 @@ from typing import Any, Dict, List, Literal, Optional
 from open_webui.utils.auth import get_admin_user, get_verified_user
 from open_webui.config import get_config, save_config
 from open_webui.config import BannerModel
+from open_webui.constants import ERROR_MESSAGES
 
 from open_webui.utils.tools import get_tool_server_data, get_tool_servers_data
 from open_webui.utils.mcp import (
@@ -33,9 +35,150 @@ from open_webui.utils.user_tools import (
     set_user_tool_server_connections,
 )
 from open_webui.utils.data_management import deep_merge_dict
+from open_webui.models.shared_tool_servers import SharedToolServers
+from open_webui.utils.shared_tool_servers import (
+    build_shared_mcp_display_metadata,
+    build_shared_openapi_display_metadata,
+    ensure_direct_tool_servers_access,
+    ensure_shareable_mcp_connection,
+    ensure_shareable_openapi_connection,
+    get_connection_shared_id,
+    strip_connection_share_runtime_fields,
+)
 
 
 router = APIRouter()
+
+
+def _sanitize_connection_shared_fields(connection: dict) -> dict:
+    payload = strip_connection_share_runtime_fields(connection)
+    shared_id = get_connection_shared_id(connection)
+    if shared_id:
+        payload["shared_id"] = shared_id
+    else:
+        payload.pop("shared_id", None)
+    return payload
+
+
+def _get_owner_shared_records_map(owner_user_id: str, kind: str) -> dict:
+    return {
+        item.id: item
+        for item in SharedToolServers.get_shared_tool_servers_by_owner_user_id(
+            owner_user_id
+        )
+        if item.kind == kind
+    }
+
+
+def _attach_shared_connection_metadata(
+    owner_user_id: str, kind: str, connections: list[dict]
+) -> list[dict]:
+    shared_records_map = _get_owner_shared_records_map(owner_user_id, kind)
+    enriched_connections = []
+
+    for connection in connections:
+        payload = _sanitize_connection_shared_fields(connection)
+        shared_id = payload.get("shared_id")
+        if shared_id and shared_id in shared_records_map:
+            shared = shared_records_map[shared_id]
+            payload["shared_id"] = shared.id
+            payload["shared_access_control"] = shared.access_control
+            payload["shared_enabled"] = shared.enabled
+        enriched_connections.append(payload)
+
+    return enriched_connections
+
+
+async def _sync_shared_openapi_connections(
+    owner_user_id: str,
+    previous_connections: list[dict],
+    next_connections: list[dict],
+) -> list[dict]:
+    shared_records_map = _get_owner_shared_records_map(owner_user_id, "openapi")
+    previous_shared_ids = {
+        shared_id
+        for shared_id in (
+            get_connection_shared_id(connection) for connection in previous_connections
+        )
+        if shared_id
+    }
+    next_shared_ids: set[str] = set()
+    synced_connections: list[dict] = []
+
+    for connection in next_connections:
+        payload = _sanitize_connection_shared_fields(connection)
+        shared_id = payload.get("shared_id")
+        if shared_id:
+            shared = shared_records_map.get(shared_id)
+            if shared is None:
+                payload.pop("shared_id", None)
+            else:
+                next_shared_ids.add(shared.id)
+                if shared.enabled:
+                    ensure_shareable_openapi_connection(payload)
+                    display_metadata = build_shared_openapi_display_metadata(
+                        payload, shared.display_metadata
+                    )
+                    SharedToolServers.update_shared_tool_server_by_id(
+                        shared.id,
+                        {
+                            "connection_payload": payload,
+                            "display_metadata": display_metadata,
+                        },
+                    )
+        synced_connections.append(payload)
+
+    removed_shared_ids = sorted(previous_shared_ids - next_shared_ids)
+    if removed_shared_ids:
+        SharedToolServers.delete_shared_tool_servers_by_ids(removed_shared_ids)
+
+    return synced_connections
+
+
+async def _sync_shared_mcp_connections(
+    owner_user_id: str,
+    previous_connections: list[dict],
+    next_connections: list[dict],
+) -> list[dict]:
+    shared_records_map = _get_owner_shared_records_map(owner_user_id, "mcp")
+    previous_shared_ids = {
+        shared_id
+        for shared_id in (
+            get_connection_shared_id(connection) for connection in previous_connections
+        )
+        if shared_id
+    }
+    next_shared_ids: set[str] = set()
+    synced_connections: list[dict] = []
+
+    for connection in next_connections:
+        payload = _sanitize_connection_shared_fields(connection)
+        shared_id = payload.get("shared_id")
+        if shared_id:
+            shared = shared_records_map.get(shared_id)
+            if shared is None:
+                payload.pop("shared_id", None)
+            else:
+                next_shared_ids.add(shared.id)
+                if shared.enabled:
+                    ensure_shareable_mcp_connection(payload)
+                    display_metadata = build_shared_mcp_display_metadata(
+                        payload, shared.display_metadata
+                    )
+                    SharedToolServers.update_shared_tool_server_by_id(
+                        shared.id,
+                        {
+                            "connection_payload": payload,
+                            "display_metadata": display_metadata,
+                        },
+                    )
+        synced_connections.append(payload)
+
+    removed_shared_ids = sorted(previous_shared_ids - next_shared_ids)
+    if removed_shared_ids:
+        SharedToolServers.delete_shared_tool_servers_by_ids(removed_shared_ids)
+
+    return synced_connections
 
 
 ############################
@@ -170,10 +313,24 @@ class ToolServersConfigForm(BaseModel):
     TOOL_SERVER_CONNECTIONS: list[ToolServerConnection]
 
 
+def _normalize_tool_server_connection(connection: ToolServerConnection) -> dict:
+    payload = _sanitize_connection_shared_fields(connection.model_dump())
+    payload["url"] = str(payload.get("url") or "").rstrip("/")
+    payload["path"] = str(payload.get("path") or "openapi.json").strip() or "openapi.json"
+    payload["auth_type"] = str(payload.get("auth_type") or "bearer").lower()
+    if payload.get("auth_type") != "bearer":
+        payload.pop("key", None)
+    return payload
+
+
 @router.get("/tool_servers", response_model=ToolServersConfigForm)
 async def get_tool_servers_config(request: Request, user=Depends(get_verified_user)):
+    ensure_direct_tool_servers_access(request, user)
+    connections = get_user_tool_server_connections(request, user)
     return {
-        "TOOL_SERVER_CONNECTIONS": get_user_tool_server_connections(request, user),
+        "TOOL_SERVER_CONNECTIONS": _attach_shared_connection_metadata(
+            user.id, "openapi", connections
+        ),
     }
 
 
@@ -183,14 +340,22 @@ async def set_tool_servers_config(
     form_data: ToolServersConfigForm,
     user=Depends(get_verified_user),
 ):
+    ensure_direct_tool_servers_access(request, user)
+    previous_connections = get_user_tool_server_connections(request, user)
     connections = [
-        connection.model_dump() for connection in form_data.TOOL_SERVER_CONNECTIONS
+        _normalize_tool_server_connection(connection)
+        for connection in form_data.TOOL_SERVER_CONNECTIONS
     ]
+    connections = await _sync_shared_openapi_connections(
+        user.id, previous_connections, connections
+    )
 
     set_user_tool_server_connections(user, connections)
 
     return {
-        "TOOL_SERVER_CONNECTIONS": connections,
+        "TOOL_SERVER_CONNECTIONS": _attach_shared_connection_metadata(
+            user.id, "openapi", connections
+        ),
     }
 
 
@@ -202,6 +367,7 @@ async def verify_tool_servers_config(
     Verify the connection to the tool server.
     """
     try:
+        ensure_direct_tool_servers_access(request, user)
 
         token = None
         if form_data.auth_type == "bearer":
@@ -216,6 +382,130 @@ async def verify_tool_servers_config(
             status_code=400,
             detail=f"Failed to connect to the tool server: {str(e)}",
         )
+
+
+class SharedToolServerAccessForm(BaseModel):
+    access_control: Optional[dict] = None
+
+
+class SharedToolServerAccessResponse(BaseModel):
+    id: str
+    enabled: bool
+    access_control: Optional[dict] = None
+
+
+@router.post(
+    "/tool_servers/{index}/share", response_model=SharedToolServerAccessResponse
+)
+async def share_tool_server_connection(
+    index: int,
+    request: Request,
+    form_data: SharedToolServerAccessForm,
+    user=Depends(get_admin_user),
+):
+    connections = get_user_tool_server_connections(request, user)
+    if index < 0 or index >= len(connections):
+        raise HTTPException(status_code=404, detail=ERROR_MESSAGES.NOT_FOUND)
+
+    connection = _sanitize_connection_shared_fields(connections[index])
+    ensure_shareable_openapi_connection(connection)
+
+    shared_id = get_connection_shared_id(connection)
+    shared = None
+    if shared_id:
+        shared = SharedToolServers.get_shared_tool_server_by_id(shared_id)
+        if shared and (shared.kind != "openapi" or shared.owner_user_id != user.id):
+            shared = None
+
+    display_metadata = build_shared_openapi_display_metadata(
+        connection,
+        shared.display_metadata if shared else None,
+    )
+    try:
+        auth_type = str(connection.get("auth_type") or "bearer").lower()
+        token = connection.get("key", "") if auth_type == "bearer" else None
+        openapi_data = await get_tool_server_data(
+            token,
+            f"{str(connection.get('url') or '').rstrip('/')}/{str(connection.get('path') or 'openapi.json').strip() or 'openapi.json'}",
+        )
+        info = openapi_data.get("info", {}) or {}
+        display_metadata = {
+            **display_metadata,
+            "title": str(info.get("title") or "").strip() or display_metadata.get("title"),
+            "description": str(info.get("description") or "").strip()
+            or display_metadata.get("description"),
+        }
+    except Exception:
+        pass
+    if shared:
+        shared = SharedToolServers.update_shared_tool_server_by_id(
+            shared.id,
+            {
+                "connection_payload": connection,
+                "display_metadata": display_metadata,
+                "access_control": form_data.access_control,
+                "enabled": True,
+            },
+        )
+        if shared is None:
+            raise HTTPException(status_code=400, detail="Failed to update shared tool server")
+    else:
+        shared = SharedToolServers.insert_new_shared_tool_server(
+            user.id,
+            kind="openapi",
+            connection_payload=connection,
+            display_metadata=display_metadata,
+            access_control=form_data.access_control,
+            enabled=True,
+        )
+        if shared is None:
+            raise HTTPException(status_code=400, detail="Failed to share tool server")
+
+    updated_connections = [deepcopy(item) for item in connections]
+    updated_connections[index] = {
+        **_sanitize_connection_shared_fields(updated_connections[index]),
+        "shared_id": shared.id,
+    }
+    set_user_tool_server_connections(user, updated_connections)
+
+    return {
+        "id": shared.id,
+        "enabled": shared.enabled,
+        "access_control": shared.access_control,
+    }
+
+
+@router.delete(
+    "/tool_servers/{index}/share", response_model=SharedToolServerAccessResponse
+)
+async def unshare_tool_server_connection(
+    index: int,
+    request: Request,
+    user=Depends(get_admin_user),
+):
+    connections = get_user_tool_server_connections(request, user)
+    if index < 0 or index >= len(connections):
+        raise HTTPException(status_code=404, detail=ERROR_MESSAGES.NOT_FOUND)
+
+    shared_id = get_connection_shared_id(connections[index])
+    if not shared_id:
+        raise HTTPException(status_code=404, detail=ERROR_MESSAGES.NOT_FOUND)
+
+    shared = SharedToolServers.get_shared_tool_server_by_id(shared_id)
+    if shared is None or shared.kind != "openapi" or shared.owner_user_id != user.id:
+        raise HTTPException(status_code=404, detail=ERROR_MESSAGES.NOT_FOUND)
+
+    updated = SharedToolServers.update_shared_tool_server_by_id(
+        shared.id, {"enabled": False}
+    )
+    if updated is None:
+        raise HTTPException(status_code=400, detail="Failed to revoke shared tool server")
+
+    return {
+        "id": updated.id,
+        "enabled": updated.enabled,
+        "access_control": updated.access_control,
+    }
 
 
 ############################
@@ -326,6 +616,7 @@ class MCPServerConnection(BaseModel):
 
 
 def _normalize_mcp_server_connection(connection: MCPServerConnection) -> dict:
+    shared_id = get_connection_shared_id(connection.model_dump())
     base = {
         "transport_type": connection.transport_type,
         "name": connection.name,
@@ -355,7 +646,11 @@ def _normalize_mcp_server_connection(connection: MCPServerConnection) -> dict:
         if connection.key:
             normalized["key"] = connection.key
 
-    return {key: value for key, value in normalized.items() if value is not None}
+    normalized = {key: value for key, value in normalized.items() if value is not None}
+    normalized = _sanitize_connection_shared_fields(normalized)
+    if shared_id:
+        normalized["shared_id"] = shared_id
+    return normalized
 
 
 class MCPServersConfigForm(BaseModel):
@@ -374,8 +669,11 @@ def _build_mcp_servers_config_response(connections: list[dict]) -> dict:
 
 @router.get("/mcp_servers", response_model=MCPServersConfigForm)
 async def get_mcp_servers_config(request: Request, user=Depends(get_verified_user)):
+    ensure_direct_tool_servers_access(request, user)
     return _build_mcp_servers_config_response(
-        get_user_mcp_server_connections(request, user)
+        _attach_shared_connection_metadata(
+            user.id, "mcp", get_user_mcp_server_connections(request, user)
+        )
     )
 
 
@@ -383,6 +681,7 @@ async def get_mcp_servers_config(request: Request, user=Depends(get_verified_use
 async def set_mcp_servers_config(
     request: Request, form_data: MCPServersConfigForm, user=Depends(get_verified_user)
 ):
+    ensure_direct_tool_servers_access(request, user)
     if (
         getattr(user, "role", None) != "admin"
         and any(
@@ -392,14 +691,20 @@ async def set_mcp_servers_config(
     ):
         raise HTTPException(status_code=403, detail="stdio MCP servers are admin-only")
 
+    previous_connections = get_user_mcp_server_connections(request, user)
     connections = [
         _normalize_mcp_server_connection(connection)
         for connection in form_data.MCP_SERVER_CONNECTIONS
     ]
+    connections = await _sync_shared_mcp_connections(
+        user.id, previous_connections, connections
+    )
 
     set_user_mcp_server_connections(user, connections)
 
-    return _build_mcp_servers_config_response(connections)
+    return _build_mcp_servers_config_response(
+        _attach_shared_connection_metadata(user.id, "mcp", connections)
+    )
 
 
 @router.post("/mcp_servers/verify")
@@ -410,6 +715,7 @@ async def verify_mcp_server_connection(
     Verify the connection to an MCP server.
     """
     try:
+        ensure_direct_tool_servers_access(request, user)
         if form_data.transport_type == "stdio" and getattr(user, "role", None) != "admin":
             raise HTTPException(status_code=403, detail="stdio MCP servers are admin-only")
 
@@ -451,6 +757,102 @@ async def verify_mcp_server_connection(
             status_code=400,
             detail=f"Failed to connect to the MCP server: {str(e)}",
         )
+
+
+@router.post("/mcp_servers/{index}/share", response_model=SharedToolServerAccessResponse)
+async def share_mcp_server_connection(
+    index: int,
+    request: Request,
+    form_data: SharedToolServerAccessForm,
+    user=Depends(get_admin_user),
+):
+    connections = get_user_mcp_server_connections(request, user)
+    if index < 0 or index >= len(connections):
+        raise HTTPException(status_code=404, detail=ERROR_MESSAGES.NOT_FOUND)
+
+    connection = _sanitize_connection_shared_fields(connections[index])
+    ensure_shareable_mcp_connection(connection)
+
+    shared_id = get_connection_shared_id(connection)
+    shared = None
+    if shared_id:
+        shared = SharedToolServers.get_shared_tool_server_by_id(shared_id)
+        if shared and (shared.kind != "mcp" or shared.owner_user_id != user.id):
+            shared = None
+
+    display_metadata = build_shared_mcp_display_metadata(
+        connection,
+        shared.display_metadata if shared else None,
+    )
+    if shared:
+        shared = SharedToolServers.update_shared_tool_server_by_id(
+            shared.id,
+            {
+                "connection_payload": connection,
+                "display_metadata": display_metadata,
+                "access_control": form_data.access_control,
+                "enabled": True,
+            },
+        )
+        if shared is None:
+            raise HTTPException(status_code=400, detail="Failed to update shared MCP server")
+    else:
+        shared = SharedToolServers.insert_new_shared_tool_server(
+            user.id,
+            kind="mcp",
+            connection_payload=connection,
+            display_metadata=display_metadata,
+            access_control=form_data.access_control,
+            enabled=True,
+        )
+        if shared is None:
+            raise HTTPException(status_code=400, detail="Failed to share MCP server")
+
+    updated_connections = [deepcopy(item) for item in connections]
+    updated_connections[index] = {
+        **_sanitize_connection_shared_fields(updated_connections[index]),
+        "shared_id": shared.id,
+    }
+    set_user_mcp_server_connections(user, updated_connections)
+
+    return {
+        "id": shared.id,
+        "enabled": shared.enabled,
+        "access_control": shared.access_control,
+    }
+
+
+@router.delete(
+    "/mcp_servers/{index}/share", response_model=SharedToolServerAccessResponse
+)
+async def unshare_mcp_server_connection(
+    index: int,
+    request: Request,
+    user=Depends(get_admin_user),
+):
+    connections = get_user_mcp_server_connections(request, user)
+    if index < 0 or index >= len(connections):
+        raise HTTPException(status_code=404, detail=ERROR_MESSAGES.NOT_FOUND)
+
+    shared_id = get_connection_shared_id(connections[index])
+    if not shared_id:
+        raise HTTPException(status_code=404, detail=ERROR_MESSAGES.NOT_FOUND)
+
+    shared = SharedToolServers.get_shared_tool_server_by_id(shared_id)
+    if shared is None or shared.kind != "mcp" or shared.owner_user_id != user.id:
+        raise HTTPException(status_code=404, detail=ERROR_MESSAGES.NOT_FOUND)
+
+    updated = SharedToolServers.update_shared_tool_server_by_id(
+        shared.id, {"enabled": False}
+    )
+    if updated is None:
+        raise HTTPException(status_code=400, detail="Failed to revoke shared MCP server")
+
+    return {
+        "id": updated.id,
+        "enabled": updated.enabled,
+        "access_control": updated.access_control,
+    }
 
 
 ############################

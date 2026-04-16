@@ -88,6 +88,8 @@
 			a[tool.id] = {
 				name: tool.name,
 				description: tool.meta.description,
+				source: tool.meta?.source,
+				ownerName: tool.meta?.owner_name,
 				enabled: selectedToolIds.includes(tool.id)
 			};
 			return a;
@@ -185,7 +187,17 @@
 
 									<div class=" truncate">{tools[toolId].name}</div>
 								</Tooltip>
+								{#if tools[toolId]?.source === 'shared'}
+									<span class="shrink-0 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300">
+										共享
+									</span>
+								{/if}
 							</div>
+							{#if tools[toolId]?.source === 'shared' && tools[toolId]?.ownerName}
+								<div class="mt-0.5 text-[11px] text-gray-500 dark:text-gray-400">
+									管理员：{tools[toolId].ownerName}
+								</div>
+							{/if}
 
 							<div class=" shrink-0" on:click|stopPropagation>
 								<Switch

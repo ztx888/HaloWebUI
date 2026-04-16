@@ -8,6 +8,7 @@ from open_webui.models.tools import (
     ToolForm,
     ToolModel,
     ToolResponse,
+    ToolMeta,
     ToolUserResponse,
     Tools,
 )
@@ -34,6 +35,14 @@ from open_webui.utils.mcp import (
 from open_webui.utils.user_tools import (
     get_user_mcp_server_connections,
     get_user_tool_server_connections,
+)
+from open_webui.models.users import Users, UserResponse
+from open_webui.utils.shared_tool_servers import (
+    MCP_SHARED_TOOL_PREFIX,
+    OPENAPI_SHARED_TOOL_PREFIX,
+    build_runtime_shared_connection_payload,
+    can_use_direct_tool_servers,
+    get_accessible_shared_tool_servers,
 )
 
 log = logging.getLogger(__name__)
@@ -73,23 +82,32 @@ IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 @router.get("/", response_model=list[ToolUserResponse])
 async def get_tools(request: Request, user=Depends(get_verified_user)):
-    tool_server_connections = get_user_tool_server_connections(request, user)
-    mcp_server_connections = get_user_mcp_server_connections(request, user)
-
-    # Resolve per-user server-side tools (OpenAPI / MCP). Do NOT store these on app.state,
-    # otherwise configs leak across accounts.
-    tool_servers_data = await get_tool_servers_data(
-        tool_server_connections,
-        session_token=request.state.token.credentials,
-    )
-    mcp_servers_data = [
-        server
-        for server in get_mcp_servers_cached_meta(mcp_server_connections)
-        if (server.get("config") or {}).get("enable", True)
-    ]
-
     # Workspace tools are already scoped via access_control and/or ownership.
     tools = Tools.get_tools_list_by_user_id(user.id, permission="read")
+    direct_tool_servers_enabled = can_use_direct_tool_servers(request, user)
+
+    tool_server_connections = []
+    mcp_server_connections = []
+    tool_servers_data = []
+    mcp_servers_data = []
+    shared_tool_servers = []
+
+    if direct_tool_servers_enabled:
+        tool_server_connections = get_user_tool_server_connections(request, user)
+        mcp_server_connections = get_user_mcp_server_connections(request, user)
+
+        # Resolve per-user server-side tools (OpenAPI / MCP). Do NOT store these on app.state,
+        # otherwise configs leak across accounts.
+        tool_servers_data = await get_tool_servers_data(
+            tool_server_connections,
+            session_token=request.state.token.credentials,
+        )
+        mcp_servers_data = [
+            server
+            for server in get_mcp_servers_cached_meta(mcp_server_connections)
+            if (server.get("config") or {}).get("enable", True)
+        ]
+        shared_tool_servers = get_accessible_shared_tool_servers(request, user)
 
     for server in tool_servers_data:
         tools.append(
@@ -146,6 +164,87 @@ async def get_tools(request: Request, user=Depends(get_verified_user)):
                 }
             )
         )
+
+    if shared_tool_servers:
+        owner_ids = list({shared_tool_server.owner_user_id for shared_tool_server in shared_tool_servers})
+        owners_map = Users.get_users_map_by_ids(owner_ids) if owner_ids else {}
+        now = int(time.time())
+
+        for shared_tool_server in shared_tool_servers:
+            owner = owners_map.get(shared_tool_server.owner_user_id)
+            owner_name = getattr(owner, "name", "") if owner else ""
+
+            if shared_tool_server.kind == "openapi":
+                display_metadata = shared_tool_server.display_metadata or {}
+                title = (
+                    str(display_metadata.get("title") or "").strip()
+                    or str(display_metadata.get("url") or "").strip()
+                    or "OpenAPI Server"
+                )
+                description = str(display_metadata.get("description") or "").strip()
+
+                tools.append(
+                    ToolUserResponse(
+                        id=f"{OPENAPI_SHARED_TOOL_PREFIX}{shared_tool_server.id}",
+                        user_id=shared_tool_server.owner_user_id,
+                        name=title,
+                        meta=ToolMeta(
+                            description=description,
+                            source="shared",
+                            owner_name=owner_name,
+                            shared_kind="openapi",
+                        ),
+                        access_control=shared_tool_server.access_control,
+                        updated_at=shared_tool_server.updated_at or now,
+                        created_at=shared_tool_server.created_at or now,
+                        user=UserResponse(**owner.model_dump()) if owner else None,
+                    )
+                )
+                continue
+
+            if shared_tool_server.kind == "mcp":
+                connection_payload = build_runtime_shared_connection_payload(
+                    shared_tool_server.connection_payload
+                )
+                cached_meta_list = get_mcp_servers_cached_meta([connection_payload])
+                server = cached_meta_list[0] if cached_meta_list else {}
+                display_metadata = shared_tool_server.display_metadata or {}
+                transport_type = str(server.get("transport_type") or display_metadata.get("transport_type") or "http").lower()
+                server_info = server.get("server_info", {}) or display_metadata.get("server_info") or {}
+                server_version = server_info.get("version")
+                verified_at = server.get("verified_at") or display_metadata.get("verified_at")
+                transport_label = "HTTP" if transport_type == "http" else "stdio"
+                status_label = f"已验证 {verified_at}" if verified_at else "未验证"
+                server_name, server_description = get_mcp_server_display_metadata(
+                    {
+                        **server,
+                        "name": display_metadata.get("title"),
+                        "description": display_metadata.get("description"),
+                    },
+                    default_description=(
+                        f"MCP ({transport_label})"
+                        f"{' - v' + str(server_version) if server_version else ''}"
+                        f" - {status_label}"
+                    ),
+                )
+
+                tools.append(
+                    ToolUserResponse(
+                        id=f"{MCP_SHARED_TOOL_PREFIX}{shared_tool_server.id}",
+                        user_id=shared_tool_server.owner_user_id,
+                        name=server_name,
+                        meta=ToolMeta(
+                            description=server_description,
+                            source="shared",
+                            owner_name=owner_name,
+                            shared_kind="mcp",
+                        ),
+                        access_control=shared_tool_server.access_control,
+                        updated_at=shared_tool_server.updated_at or now,
+                        created_at=shared_tool_server.created_at or now,
+                        user=UserResponse(**owner.model_dump()) if owner else None,
+                    )
+                )
 
     return tools
 
