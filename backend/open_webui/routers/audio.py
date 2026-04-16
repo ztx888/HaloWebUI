@@ -39,11 +39,13 @@ from open_webui.config import (
 
 from open_webui.constants import ERROR_MESSAGES
 from open_webui.env import (
+    AIOHTTP_CLIENT_SESSION_SSL,
     AIOHTTP_CLIENT_TIMEOUT,
     ENV,
     SRC_LOG_LEVELS,
     DEVICE_TYPE,
     ENABLE_FORWARD_USER_INFO_HEADERS,
+    REQUESTS_VERIFY,
 )
 from open_webui.utils.error_handling import (
     build_error_detail,
@@ -337,6 +339,7 @@ async def speech(request: Request, user=Depends(get_verified_user)):
                             else {}
                         ),
                     },
+                    ssl=AIOHTTP_CLIENT_SESSION_SSL,
                 ) as r:
                     r.raise_for_status()
 
@@ -392,6 +395,7 @@ async def speech(request: Request, user=Depends(get_verified_user)):
                         "Content-Type": "application/json",
                         "xi-api-key": request.app.state.config.TTS_API_KEY,
                     },
+                    ssl=AIOHTTP_CLIENT_SESSION_SSL,
                 ) as r:
                     r.raise_for_status()
 
@@ -448,6 +452,7 @@ async def speech(request: Request, user=Depends(get_verified_user)):
                         "X-Microsoft-OutputFormat": output_format,
                     },
                     data=data,
+                    ssl=AIOHTTP_CLIENT_SESSION_SSL,
                 ) as r:
                     r.raise_for_status()
 
@@ -585,6 +590,7 @@ def transcribe(request: Request, file_path, language: str = ""):
                     },
                     files={"file": (filename, audio_file)},
                     data=form_data_fields,
+                    verify=REQUESTS_VERIFY,
                 )
 
             r.raise_for_status()
@@ -640,6 +646,7 @@ def transcribe(request: Request, file_path, language: str = ""):
                 headers=headers,
                 params=params,
                 data=file_data,
+                verify=REQUESTS_VERIFY,
             )
             r.raise_for_status()
             response_data = r.json()
@@ -741,6 +748,7 @@ def transcribe(request: Request, file_path, language: str = ""):
                     headers={
                         "Ocp-Apim-Subscription-Key": api_key,
                     },
+                    verify=REQUESTS_VERIFY,
                 )
 
             r.raise_for_status()
@@ -879,7 +887,8 @@ def get_available_models(request: Request) -> list[dict]:
         ):
             try:
                 response = requests.get(
-                    f"{request.app.state.config.TTS_OPENAI_API_BASE_URL}/audio/models"
+                    f"{request.app.state.config.TTS_OPENAI_API_BASE_URL}/audio/models",
+                    verify=REQUESTS_VERIFY,
                 )
                 response.raise_for_status()
                 data = response.json()
@@ -898,6 +907,7 @@ def get_available_models(request: Request) -> list[dict]:
                     "Content-Type": "application/json",
                 },
                 timeout=5,
+                verify=REQUESTS_VERIFY,
             )
             response.raise_for_status()
             models = response.json()
@@ -925,7 +935,8 @@ def get_available_voices(request) -> dict:
         ):
             try:
                 response = requests.get(
-                    f"{request.app.state.config.TTS_OPENAI_API_BASE_URL}/audio/voices"
+                    f"{request.app.state.config.TTS_OPENAI_API_BASE_URL}/audio/voices",
+                    verify=REQUESTS_VERIFY,
                 )
                 response.raise_for_status()
                 data = response.json()
@@ -966,7 +977,11 @@ def get_available_voices(request) -> dict:
                 "Ocp-Apim-Subscription-Key": request.app.state.config.TTS_API_KEY
             }
 
-            response = requests.get(url, headers=headers)
+            response = requests.get(
+                url,
+                headers=headers,
+                verify=REQUESTS_VERIFY,
+            )
             response.raise_for_status()
             voices = response.json()
 
@@ -998,6 +1013,7 @@ def get_elevenlabs_voices(api_key: str) -> dict:
                 "xi-api-key": api_key,
                 "Content-Type": "application/json",
             },
+            verify=REQUESTS_VERIFY,
         )
         response.raise_for_status()
         voices_data = response.json()

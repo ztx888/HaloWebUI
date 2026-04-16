@@ -16,8 +16,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, stat
 from open_webui.config import CACHE_DIR
 from open_webui.constants import ERROR_MESSAGES
 from open_webui.env import (
+    AIOHTTP_CLIENT_SESSION_SSL,
     AIOHTTP_CLIENT_TIMEOUT_MODEL_LIST,
     ENABLE_FORWARD_USER_INFO_HEADERS,
+    REQUESTS_VERIFY,
     SRC_LOG_LEVELS,
 )
 from open_webui.routers import gemini as gemini_router
@@ -1245,7 +1247,11 @@ async def _discover_openai_image_models(
             timeout=aiohttp.ClientTimeout(total=AIOHTTP_CLIENT_TIMEOUT_MODEL_LIST),
             trust_env=True,
         ) as session:
-            async with session.get(models_url, headers=headers) as response:
+            async with session.get(
+                models_url,
+                headers=headers,
+                ssl=AIOHTTP_CLIENT_SESSION_SSL,
+            ) as response:
                 body = await _read_aiohttp_body(response)
                 if response.status != 200:
                     if openai_router._looks_like_models_listing_unsupported(
@@ -1353,6 +1359,7 @@ def _discover_comfyui_image_models(request: Request) -> list[dict[str, Any]]:
         url=f"{request.app.state.config.COMFYUI_BASE_URL}/object_info",
         headers=headers,
         timeout=15,
+        verify=REQUESTS_VERIFY,
     )
     response.raise_for_status()
     info = response.json()
@@ -1387,6 +1394,7 @@ def _discover_automatic1111_image_models(request: Request) -> list[dict[str, Any
         url=f"{request.app.state.config.AUTOMATIC1111_BASE_URL}/sdapi/v1/sd-models",
         headers={"authorization": get_automatic1111_api_auth(request)},
         timeout=15,
+        verify=REQUESTS_VERIFY,
     )
     response.raise_for_status()
     raw_models = response.json()
@@ -1726,6 +1734,7 @@ async def verify_url(request: Request, user=Depends(get_admin_user)):
             r = requests.get(
                 url=f"{request.app.state.config.AUTOMATIC1111_BASE_URL}/sdapi/v1/options",
                 headers={"authorization": get_automatic1111_api_auth(request)},
+                verify=REQUESTS_VERIFY,
             )
             r.raise_for_status()
             return True
@@ -1743,6 +1752,7 @@ async def verify_url(request: Request, user=Depends(get_admin_user)):
             r = requests.get(
                 url=f"{request.app.state.config.COMFYUI_BASE_URL}/object_info",
                 headers=headers,
+                verify=REQUESTS_VERIFY,
             )
             r.raise_for_status()
             return True
@@ -1797,6 +1807,7 @@ def set_image_model(request: Request, model: str):
         r = requests.get(
             url=f"{request.app.state.config.AUTOMATIC1111_BASE_URL}/sdapi/v1/options",
             headers={"authorization": api_auth},
+            verify=REQUESTS_VERIFY,
         )
         options = r.json()
         if model != options["sd_model_checkpoint"]:
@@ -1805,6 +1816,7 @@ def set_image_model(request: Request, model: str):
                 url=f"{request.app.state.config.AUTOMATIC1111_BASE_URL}/sdapi/v1/options",
                 json=options,
                 headers={"authorization": api_auth},
+                verify=REQUESTS_VERIFY,
             )
     return request.app.state.config.IMAGE_GENERATION_MODEL
 
@@ -1836,6 +1848,7 @@ def get_image_model(request):
             r = requests.get(
                 url=f"{request.app.state.config.AUTOMATIC1111_BASE_URL}/sdapi/v1/options",
                 headers={"authorization": get_automatic1111_api_auth(request)},
+                verify=REQUESTS_VERIFY,
             )
             options = r.json()
             return options["sd_model_checkpoint"]
@@ -2390,7 +2403,13 @@ def _post_json_with_attempts(
 
     for url, headers in attempts:
         try:
-            response = requests.post(url=url, json=payload, headers=headers, timeout=timeout)
+            response = requests.post(
+                url=url,
+                json=payload,
+                headers=headers,
+                timeout=timeout,
+                verify=REQUESTS_VERIFY,
+            )
         except Exception as error:
             last_error = error
             continue
@@ -2457,6 +2476,7 @@ async def _generate_via_openai_images_endpoint(
         json=payload,
         headers=headers,
         timeout=60,
+        verify=REQUESTS_VERIFY,
     )
     if response.status_code >= 400:
         raise HTTPException(
@@ -2555,6 +2575,7 @@ async def _generate_via_openai_chat_image(
             json=candidate_payload,
             headers=headers,
             timeout=90,
+            verify=REQUESTS_VERIFY,
         )
         if response.status_code < 400:
             response_body = _parse_upstream_json_response(
@@ -3104,6 +3125,7 @@ async def image_generations(
                 url=f"{request.app.state.config.AUTOMATIC1111_BASE_URL}/sdapi/v1/txt2img",
                 json=data,
                 headers={"authorization": get_automatic1111_api_auth(request)},
+                verify=REQUESTS_VERIFY,
             )
 
             res = r.json()

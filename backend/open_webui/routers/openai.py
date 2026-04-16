@@ -26,10 +26,12 @@ from open_webui.config import (
     CACHE_DIR,
 )
 from open_webui.env import (
+    AIOHTTP_CLIENT_SESSION_SSL,
     AIOHTTP_CLIENT_TIMEOUT,
     AIOHTTP_CLIENT_TIMEOUT_MODEL_LIST,
     ENABLE_FORWARD_USER_INFO_HEADERS,
     BYPASS_MODEL_ACCESS_CONTROL,
+    REQUESTS_VERIFY,
 )
 from open_webui.models.users import UserModel
 from open_webui.storage.provider import Storage
@@ -794,7 +796,12 @@ async def _upload_file_to_openai(
                 content_type=content_type or "application/octet-stream",
             )
 
-            async with session.post(upload_url, data=form, headers=headers) as response:
+            async with session.post(
+                upload_url,
+                data=form,
+                headers=headers,
+                ssl=AIOHTTP_CLIENT_SESSION_SSL,
+            ) as response:
                 data = await response.json(content_type=None)
                 if response.status >= 400:
                     message = None
@@ -1114,6 +1121,7 @@ async def _probe_responses_support_for_native_file_inputs(
                 request_url,
                 headers=headers,
                 data=json.dumps(payload, ensure_ascii=False, default=str),
+                ssl=AIOHTTP_CLIENT_SESSION_SSL,
             ) as response:
                 body = await _safe_read_upstream_body(response)
                 body_text = _truncate_text(_stringify_upstream_body(body), 1200)
@@ -1267,6 +1275,7 @@ async def send_get_request(
             async with session.get(
                 url,
                 headers=_build_upstream_headers(url, key or "", api_config or {}, user=user),
+                ssl=AIOHTTP_CLIENT_SESSION_SSL,
             ) as response:
                 body = await _safe_read_upstream_body(response)
                 if response.status == 200:
@@ -1535,6 +1544,7 @@ async def speech(request: Request, user=Depends(get_verified_user)):
                     ),
                 },
                 stream=True,
+                verify=REQUESTS_VERIFY,
             )
 
             r.raise_for_status()
@@ -1874,6 +1884,7 @@ async def get_models(
                 async with session.get(
                     models_url,
                     headers=_build_upstream_headers(url, key, api_config, user=user),
+                    ssl=AIOHTTP_CLIENT_SESSION_SSL,
                 ) as r:
                     response_data = await _safe_read_upstream_body(r)
                     if r.status != 200:
@@ -1978,7 +1989,11 @@ async def _discover_openai_probe_model(
     models_url = _get_openai_models_url(url, api_config)
 
     try:
-        async with session.get(models_url, headers=headers) as response:
+        async with session.get(
+            models_url,
+            headers=headers,
+            ssl=AIOHTTP_CLIENT_SESSION_SSL,
+        ) as response:
             body = await _safe_read_upstream_body(response)
             if response.status != 200:
                 return None
@@ -2013,7 +2028,11 @@ async def verify_connection(
         trust_env=True,
     ) as session:
         try:
-            async with session.get(models_url, headers=headers) as r:
+            async with session.get(
+                models_url,
+                headers=headers,
+                ssl=AIOHTTP_CLIENT_SESSION_SSL,
+            ) as r:
                 response_body = await _safe_read_upstream_body(r)
 
                 if r.status == 200:
@@ -2149,6 +2168,7 @@ async def health_check_connection(
                     target_url,
                     headers=headers,
                     data=json.dumps(payload, ensure_ascii=False, default=str),
+                    ssl=AIOHTTP_CLIENT_SESSION_SSL,
                 ) as response:
                     body = await _safe_read_upstream_body(response)
                     return response.status, body
@@ -2254,7 +2274,11 @@ async def verify_responses_connection(
                 timeout=aiohttp.ClientTimeout(total=AIOHTTP_CLIENT_TIMEOUT_MODEL_LIST),
                 trust_env=True,
             ) as session:
-                async with session.get(f"{url}/models", headers=headers) as r:
+                async with session.get(
+                    f"{url}/models",
+                    headers=headers,
+                    ssl=AIOHTTP_CLIENT_SESSION_SSL,
+                ) as r:
                     if r.status == 200:
                         data = await r.json()
                         items = data.get("data") if isinstance(data, dict) else None
@@ -2286,6 +2310,7 @@ async def verify_responses_connection(
             request_url,
             headers=headers,
             data=json.dumps(payload),
+            ssl=AIOHTTP_CLIENT_SESSION_SSL,
         ) as r:
             body = await _safe_read_upstream_body(r)
 
@@ -2524,6 +2549,7 @@ async def generate_chat_completion(
                 url=request_url,
                 data=payload_json,
                 headers=headers,
+                ssl=AIOHTTP_CLIENT_SESSION_SSL,
             )
 
             # ── Log upstream response metadata ──
@@ -2924,6 +2950,7 @@ async def proxy(path: str, request: Request, user=Depends(get_verified_user)):
             method=request.method,
             url=f"{url}/{path}",
             data=body,
+            ssl=AIOHTTP_CLIENT_SESSION_SSL,
             headers={
                 "Authorization": f"Bearer {key}",
                 "Content-Type": "application/json",
