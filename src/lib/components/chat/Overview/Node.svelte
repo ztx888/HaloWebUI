@@ -6,6 +6,7 @@
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import Heart from '$lib/components/icons/Heart.svelte';
 	import { getModelChatDisplayName } from '$lib/utils/model-display';
+	import { getRenderableMessageError } from '$lib/utils/chat-message-errors';
 
 	type $$Props = NodeProps;
 	export let data: $$Props['data'];
@@ -13,6 +14,17 @@
 
 	$: isCurrent = data?.isCurrent ?? false;
 	$: isOnCurrentPath = data?.isOnCurrentPath ?? false;
+	$: renderableMessageError = getRenderableMessageError(data?.message?.error, data?.message?.files);
+	$: renderableMessageErrorRecord =
+		renderableMessageError &&
+		renderableMessageError !== true &&
+		typeof renderableMessageError === 'object'
+			? (renderableMessageError as Record<string, unknown>)
+			: null;
+	$: renderableMessageErrorContent =
+		renderableMessageErrorRecord
+			? `${renderableMessageErrorRecord.content ?? ''}`
+			: '';
 </script>
 
 <div
@@ -34,7 +46,7 @@
 		}`}
 	></div>
 	<Tooltip
-		content={data?.message?.error ? data.message.error.content : data.message.content}
+		content={renderableMessageErrorContent || data?.message?.content}
 		class="w-full"
 		allowHTML={false}
 	>
@@ -53,8 +65,8 @@
 						</div>
 					</div>
 
-					{#if data?.message?.error}
-						<div class="text-red-500 line-clamp-2 text-xs mt-0.5">{data.message.error.content}</div>
+					{#if renderableMessageErrorContent}
+						<div class="text-red-500 line-clamp-2 text-xs mt-0.5">{renderableMessageErrorContent}</div>
 					{:else}
 						<div class="text-gray-500 line-clamp-2 text-xs mt-0.5">{data.message.content}</div>
 					{/if}
@@ -93,9 +105,9 @@
 						</button>
 					</div>
 
-					{#if data?.message?.error}
+					{#if renderableMessageErrorContent}
 						<div class="text-red-500 line-clamp-2 text-xs mt-0.5">
-							{data.message.error.content}
+							{renderableMessageErrorContent}
 						</div>
 					{:else}
 						<div class="text-gray-500 line-clamp-2 text-xs mt-0.5">{data.message.content}</div>

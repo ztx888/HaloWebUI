@@ -80,6 +80,10 @@
 	import { KokoroWorker } from '$lib/workers/KokoroWorker';
 	import FileItem from '$lib/components/common/FileItem.svelte';
 	import { getModelChatDisplayName } from '$lib/utils/model-display';
+	import {
+		getRenderableMessageError,
+		hasVisibleMessageFiles as messageHasVisibleFiles
+	} from '$lib/utils/chat-message-errors';
 	import type { HeadingItem } from '$lib/utils/headings';
 
 	type MessageOutlineVisibilityContext = {
@@ -111,7 +115,13 @@
 		done: boolean;
 		completedAt?: number;
 		usage?: Record<string, unknown>;
-		error?: boolean | { content: string };
+		error?:
+			| boolean
+			| {
+					content?: string;
+					type?: string;
+					[key: string]: unknown;
+			  };
 		sources?: string[];
 		followUps?: string[];
 		code_executions?: {
@@ -156,6 +166,8 @@
 	}
 
 	$: hasVisibleAssistantOutput = getVisibleAssistantOutput(message?.content ?? '') !== '';
+	$: hasVisibleMessageFiles = messageHasVisibleFiles(message?.files);
+	$: renderableMessageError = getRenderableMessageError(message?.error, message?.files);
 	$: hasVisibleThinkingOutput =
 		/<details\b[^>]*type="reasoning"/i.test(message?.content ?? '') ||
 		/<(think|thinking|reasoning)\b[^>]*>/i.test(message?.content ?? '');
@@ -876,7 +888,7 @@
 			<div class="mt-1.5 -ml-4 w-[calc(100%+1rem)] sm:ml-0 sm:w-auto">
 				<div class="chat-{message.role} w-full min-w-full markdown-prose">
 					<div>
-						{#if message.content !== '' || message.error}
+						{#if message.content !== '' || renderableMessageError || hasVisibleMessageFiles}
 							<!-- Only show status section when content is streaming (not during initial loading) -->
 							{#if displayStatusHistory.length > 0}
 								{@const status = displayStatusHistory.at(-1)}
@@ -1105,7 +1117,7 @@
 											/>
 										{/if}
 
-										{#if message.content === '' && message.done && !message.error && !(message?.files?.length > 0)}
+										{#if message.content === '' && message.done && !renderableMessageError && !hasVisibleMessageFiles}
 											<!-- Empty response: model returned 0 tokens without error -->
 											<Error
 												content={$i18n.t(
@@ -1167,9 +1179,11 @@
 											/>
 										{/if}
 
-										{#if message?.error}
+										{#if renderableMessageError}
 											<Error
-												content={message?.error === true ? message.content : message?.error}
+												content={renderableMessageError === true
+													? message.content
+													: renderableMessageError}
 											/>
 										{/if}
 

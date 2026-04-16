@@ -13,6 +13,9 @@ from open_webui.utils.middleware import (  # noqa: E402
     _consume_stream_image_delta,
     _extract_stream_content_and_files,
     _get_builtin_web_tools_to_suppress,
+    _has_nonempty_text_content,
+    _has_visible_assistant_output,
+    _has_visible_message_files,
     _merge_message_files,
     merge_message_files,
     normalize_message_files,
@@ -71,6 +74,27 @@ def test_consume_stream_image_delta_reassembles_final_image_file():
         "url": "data:image/png;base64,abcdefgh",
     }
     assert pending_images == {}
+
+
+def test_has_visible_assistant_output_accepts_text_only():
+    content_blocks = [{"type": "text", "content": "caption"}]
+
+    assert _has_nonempty_text_content(content_blocks) is True
+    assert _has_visible_assistant_output(content_blocks, []) is True
+
+
+def test_has_visible_assistant_output_accepts_files_only():
+    files = [{"type": "image", "url": "data:image/png;base64,abcd"}]
+
+    assert _has_visible_message_files(files) is True
+    assert _has_visible_assistant_output([{"type": "text", "content": ""}], files) is True
+
+
+def test_has_visible_assistant_output_rejects_empty_text_and_files():
+    assert _has_nonempty_text_content([{"type": "text", "content": "   "}]) is False
+    assert _has_visible_message_files([]) is False
+    assert _has_visible_message_files([{"type": "file", "id": "file_123"}]) is False
+    assert _has_visible_assistant_output([{"type": "text", "content": ""}], []) is False
 
 
 def test_merge_message_files_preserves_existing_non_image_files_and_deduplicates():

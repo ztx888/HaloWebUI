@@ -369,6 +369,44 @@ def _extract_stream_content_and_files(value: Any) -> tuple[str, list[dict]]:
     return "", []
 
 
+def _has_nonempty_text_content(content_blocks: Any) -> bool:
+    if not isinstance(content_blocks, list):
+        return False
+
+    for block in content_blocks:
+        if not isinstance(block, dict):
+            continue
+
+        block_type = str(block.get("type") or "").strip().lower()
+        if block_type in {"text", "reasoning"} and str(block.get("content") or "").strip():
+            return True
+
+    return False
+
+
+def _has_visible_message_files(message_files: Any) -> bool:
+    if not isinstance(message_files, list):
+        return False
+
+    for file_item in message_files:
+        if not isinstance(file_item, dict):
+            continue
+
+        if str(file_item.get("type") or "").strip().lower() != "image":
+            continue
+
+        if any(str(file_item.get(key) or "").strip() for key in ("url", "id", "name")):
+            return True
+
+    return False
+
+
+def _has_visible_assistant_output(content_blocks: Any, message_files: Any) -> bool:
+    return _has_nonempty_text_content(content_blocks) or _has_visible_message_files(
+        message_files
+    )
+
+
 def _consume_stream_image_delta(
     pending_images: dict[str, dict[str, Any]], image_delta: Any
 ) -> Optional[dict]:
@@ -3908,14 +3946,6 @@ async def process_chat_response(
                             return names
                 return names
 
-            def has_nonempty_text_content(content_blocks):
-                for block in content_blocks:
-                    btype = block.get("type")
-                    if btype in ("text", "reasoning"):
-                        if str(block.get("content") or "").strip():
-                            return True
-                return False
-
             async def emit_tool_orchestration_status(stage: str, done: bool = False, **extra):
                 data = {
                     "action": "tool_orchestration",
@@ -6403,7 +6433,7 @@ async def process_chat_response(
                         low_gain_rounds=low_gain_rounds,
                     )
 
-                    if has_nonempty_text_content(content_blocks):
+                    if _has_nonempty_text_content(content_blocks):
                         consecutive_no_text_rounds = 0
                     else:
                         consecutive_no_text_rounds += 1
@@ -6562,14 +6592,14 @@ async def process_chat_response(
                             log.info(
                                 "[TOOL ORCH] round_stop round=%s has_text=%s pending_batches=%s",
                                 tool_call_retries,
-                                has_nonempty_text_content(content_blocks),
+                                _has_nonempty_text_content(content_blocks),
                                 len(tool_calls),
                             )
                             await emit_tool_orchestration_status(
                                 "round_stop",
                                 done=True,
                                 round=tool_call_retries,
-                                has_text=has_nonempty_text_content(content_blocks),
+                                has_text=_has_nonempty_text_content(content_blocks),
                                 pending_batches=len(tool_calls),
                             )
 
@@ -6750,16 +6780,18 @@ async def process_chat_response(
 
                 finalize_error_payload = None
 
-                if tool_call_retries > 0 and not has_nonempty_text_content(content_blocks):
+                if tool_call_retries > 0 and not _has_visible_assistant_output(
+                    content_blocks, message_files
+                ):
                     log.warning(
-                        "[TOOL ORCH] finalize_trigger reason=empty_text_after_tools tool_rounds=%s pending_batches=%s",
+                        "[TOOL ORCH] finalize_trigger reason=empty_output_after_tools tool_rounds=%s pending_batches=%s",
                         tool_call_retries,
                         len(tool_calls),
                     )
                     await emit_tool_orchestration_status(
                         "finalize_start",
                         done=False,
-                        reason="empty_text_after_tools",
+                        reason="empty_output_after_tools",
                         tool_rounds=tool_call_retries,
                         pending_batches=len(tool_calls),
                     )
@@ -6781,8 +6813,10 @@ async def process_chat_response(
                         if isinstance(res, StreamingResponse):
                             await stream_body_handler(res)
                             log.info(
-                                "[TOOL ORCH] finalize_stream_done has_text=%s",
-                                has_nonempty_text_content(content_blocks),
+                                "[TOOL ORCH] finalize_stream_done has_visible_output=%s",
+                                _has_visible_assistant_output(
+                                    content_blocks, message_files
+                                ),
                             )
                         else:
                             res_data = res
@@ -6845,8 +6879,10 @@ async def process_chat_response(
                     except Exception as e:
                         log.warning(f"[TOOL CALL] Final synthesis retry failed: {e}")
 
-                    final_has_text = has_nonempty_text_content(content_blocks)
-                    if not final_has_text:
+                    final_has_visible_output = _has_visible_assistant_output(
+                        content_blocks, message_files
+                    )
+                    if not final_has_visible_output:
                         recent_tool_names = collect_recent_tool_names(content_blocks)
                         tool_names_text = (
                             "、".join(recent_tool_names)
@@ -7106,7 +7142,9 @@ async def process_chat_response(
 
                 # Detect empty response (model returned 200 but no content).
                 # Common with reverse proxies / relay services that swallow errors.
-                if not finalize_error_payload and not has_nonempty_text_content(content_blocks):
+                if not finalize_error_payload and not _has_visible_assistant_output(
+                    content_blocks, message_files
+                ):
                     model_id_display = form_data.get("model", "unknown")
                     if _stream_api_error:
                         # Real API error caused the empty content — show truthful error
