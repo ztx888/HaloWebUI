@@ -1231,25 +1231,6 @@
 							>
 								<div>
 									<div class="flex justify-between items-center text-sm">
-										<div class="font-medium">{$i18n.t('Direct Connections')}</div>
-										<Switch
-											bind:state={connectionsConfig.ENABLE_DIRECT_CONNECTIONS}
-											on:change={async () => {
-												updateConnectionsHandler();
-											}}
-										/>
-									</div>
-									<div class="mt-1.5 text-xs text-gray-400 dark:text-gray-500">
-										{$i18n.t(
-											'Direct Connections allow users to connect to their own OpenAI compatible API endpoints.'
-										)}
-									</div>
-								</div>
-
-								<hr class="border-gray-100 dark:border-gray-800" />
-
-								<div>
-									<div class="flex justify-between items-center text-sm">
 										<div class="font-medium">{$i18n.t('Cache Base Model List')}</div>
 										<Switch
 											bind:state={connectionsConfig.ENABLE_BASE_MODELS_CACHE}
