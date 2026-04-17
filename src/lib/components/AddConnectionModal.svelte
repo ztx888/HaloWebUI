@@ -29,6 +29,7 @@
 	import ConfirmDialog from '$lib/components/common/ConfirmDialog.svelte';
 	import HaloSelect from '$lib/components/common/HaloSelect.svelte';
 	import { formatConnectionErrorToast } from '$lib/utils/connection-errors';
+	import { resolveAzureProviderType } from '$lib/utils/connection-provider-state';
 
 	interface ConnectionConfig {
 		enable?: boolean;
@@ -82,8 +83,25 @@
 
 	let connectionType = 'external';
 	let azure = false;
-	$: azure =
-		(url.includes('azure.') || url.includes('cognitive.microsoft.com')) && !direct ? true : false;
+	let savedAzureProviderType = false;
+	let providerTypeTouched = false;
+	$: {
+		const nextAzure = resolveAzureProviderType({
+			currentAzure: azure,
+			url,
+			direct,
+			gemini,
+			grok,
+			anthropic,
+			ollama,
+			edit,
+			savedAzure: savedAzureProviderType,
+			providerTypeTouched
+		});
+		if (azure !== nextAzure) {
+			azure = nextAzure;
+		}
+	}
 
 	let prefixId = '';
 	let preserveEmptyPrefixId = false;
@@ -1163,6 +1181,8 @@
 			apiVersion = '';
 			azureApiVersionMode = AZURE_API_VERSION_AUTO;
 			azureCustomApiVersion = '';
+			savedAzureProviderType = false;
+			providerTypeTouched = false;
 			tags = [];
 			modelIds = [];
 			useResponsesApi = false;
@@ -1194,8 +1214,10 @@
 		batchHealthProgress = { current: 0, total: 0 };
 		modelHealthStates = {};
 		modelHealthContextKey = '';
+		providerTypeTouched = false;
 
 		if (connection) {
+			savedAzureProviderType = connection.config?.azure ?? false;
 			const shouldRestoreForceMode =
 				(!grok && connection.config?.force_mode === true) ||
 				isLegacyForceModeUrl(connection.url);
@@ -1229,7 +1251,7 @@
 			} else {
 				connectionType = connection.config?.connection_type ?? 'external';
 				if (anthropic) {
-					azure = false;
+					savedAzureProviderType = false;
 					apiVersion = '';
 					azureApiVersionMode = AZURE_API_VERSION_AUTO;
 					azureCustomApiVersion = '';
@@ -1257,7 +1279,6 @@
 						? JSON.stringify(connection.config.anthropic_extra_body, null, 2)
 						: '';
 				} else {
-					azure = connection.config?.azure ?? false;
 					apiVersion = connection.config?.api_version ?? '';
 					applyAzureApiVersionState(connection.config?.api_version ?? '');
 					useResponsesApi = connection.config?.use_responses_api ?? false;
@@ -1284,6 +1305,7 @@
 				azureCustomApiVersion = '';
 			}
 		} else {
+			savedAzureProviderType = false;
 			if (gemini) {
 				auth_type = 'x-goog-api-key';
 			}
@@ -1963,7 +1985,10 @@
 										<button
 											type="button"
 											class="px-3 py-1 text-sm bg-gray-100 dark:bg-gray-800 rounded-lg"
-											on:click={() => (azure = !azure)}
+											on:click={() => {
+												providerTypeTouched = true;
+												azure = !azure;
+											}}
 										>
 											{azure ? $i18n.t('Azure OpenAI') : $i18n.t('OpenAI')}
 										</button>

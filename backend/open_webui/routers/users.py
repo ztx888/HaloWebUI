@@ -291,7 +291,12 @@ async def update_user_settings_by_session_user(
     if not patch_payload:
         return existing_user.settings or UserSettings()
 
-    next_settings_dict = _deep_merge_dict(existing_settings_dict, patch_payload)
+    replace_paths = {("ui", "connections")}
+    next_settings_dict = _deep_merge_dict(
+        existing_settings_dict,
+        patch_payload,
+        replace_paths=replace_paths,
+    )
     connections_changed = _get_ui_connections(existing_settings_dict) != _get_ui_connections(
         next_settings_dict
     )
@@ -301,6 +306,7 @@ async def update_user_settings_by_session_user(
             user.id,
             patch_payload,
             expected_revision=form_data.revision,
+            replace_paths=replace_paths,
         )
     except UserSettingsRevisionConflict:
         raise HTTPException(

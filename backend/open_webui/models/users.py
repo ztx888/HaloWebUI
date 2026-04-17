@@ -19,12 +19,27 @@ def _as_dict(value: Any) -> dict:
     return value if isinstance(value, dict) else {}
 
 
-def _deep_merge_dict(current: dict, patch: dict) -> dict:
+def _deep_merge_dict(
+    current: dict,
+    patch: dict,
+    *,
+    replace_paths: Optional[set[tuple[str, ...]]] = None,
+    _path: tuple[str, ...] = (),
+) -> dict:
     merged = dict(current)
+    normalized_replace_paths = replace_paths or set()
 
     for key, value in patch.items():
-        if isinstance(value, dict) and isinstance(merged.get(key), dict):
-            merged[key] = _deep_merge_dict(_as_dict(merged.get(key)), value)
+        next_path = (*_path, key)
+        if next_path in normalized_replace_paths:
+            merged[key] = value
+        elif isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge_dict(
+                _as_dict(merged.get(key)),
+                value,
+                replace_paths=normalized_replace_paths,
+                _path=next_path,
+            )
         else:
             merged[key] = value
 
@@ -327,6 +342,7 @@ class UsersTable:
         id: str,
         updated: dict,
         expected_revision: Optional[int] = None,
+        replace_paths: Optional[set[tuple[str, ...]]] = None,
     ) -> Optional[UserModel]:
         try:
             with get_db() as db:
@@ -343,7 +359,11 @@ class UsersTable:
                 ):
                     raise UserSettingsRevisionConflict(current_revision)
 
-                next_settings = _deep_merge_dict(user_settings, _as_dict(updated))
+                next_settings = _deep_merge_dict(
+                    user_settings,
+                    _as_dict(updated),
+                    replace_paths=replace_paths,
+                )
                 next_settings["revision"] = current_revision + 1
 
                 user.settings = next_settings
