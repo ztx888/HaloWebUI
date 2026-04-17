@@ -1819,12 +1819,22 @@
 		}
 	};
 
+	let isLoadingSkills = false;
 	const setSkillIds = async () => {
 		if (!$skillsStore || $skillsStore.length === 0) {
-			const latestSkills = (await getSkills(localStorage.token).catch(() => [])) ?? [];
-			skillsStore.set(latestSkills);
-			if (latestSkills.length === 0 && selectedSkillIds.length > 0) {
-				selectedSkillIds = [];
+			// Prevent infinite loop: only fetch if not already loading
+			if (isLoadingSkills) {
+				return;
+			}
+			isLoadingSkills = true;
+			try {
+				const latestSkills = (await getSkills(localStorage.token).catch(() => [])) ?? [];
+				skillsStore.set(latestSkills);
+				if (latestSkills.length === 0 && selectedSkillIds.length > 0) {
+					selectedSkillIds = [];
+				}
+			} finally {
+				isLoadingSkills = false;
 			}
 		}
 
