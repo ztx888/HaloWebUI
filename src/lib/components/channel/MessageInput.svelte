@@ -52,6 +52,7 @@
 	export let id = null;
 
 	let draggedOver = false;
+	let dragCounter = 0;
 
 	let recording = false;
 	let content = '';
@@ -530,38 +531,38 @@
 	const handleKeyDown = (event: KeyboardEvent) => {
 		if (event.key === 'Escape') {
 			console.log('Escape');
+			dragCounter = 0;
 			draggedOver = false;
 		}
+	};
+
+	const onDragEnter = (e) => {
+		if (!e.dataTransfer?.types?.includes('Files')) return;
+		dragCounter++;
+		draggedOver = true;
 	};
 
 	const onDragOver = (e) => {
 		e.preventDefault();
-
-		// Check if a file is being draggedOver.
-		if (e.dataTransfer?.types?.includes('Files')) {
-			draggedOver = true;
-		} else {
-			draggedOver = false;
-		}
 	};
 
 	const onDragLeave = () => {
-		draggedOver = false;
+		if (dragCounter > 0) dragCounter--;
+		if (dragCounter === 0) draggedOver = false;
 	};
 
 	const onDrop = async (e) => {
 		e.preventDefault();
-		console.log(e);
+
+		dragCounter = 0;
+		draggedOver = false;
 
 		if (e.dataTransfer?.files) {
 			const inputFiles = Array.from(e.dataTransfer?.files);
 			if (inputFiles && inputFiles.length > 0) {
-				console.log(inputFiles);
 				await inputFilesHandler(inputFiles);
 			}
 		}
-
-		draggedOver = false;
 	};
 
 	const submitHandler = async () => {
@@ -664,6 +665,7 @@
 
 		const dropzoneElement = document.getElementById('channel-container');
 
+		dropzoneElement?.addEventListener('dragenter', onDragEnter);
 		dropzoneElement?.addEventListener('dragover', onDragOver);
 		dropzoneElement?.addEventListener('drop', onDrop);
 		dropzoneElement?.addEventListener('dragleave', onDragLeave);
@@ -676,6 +678,7 @@
 		const dropzoneElement = document.getElementById('channel-container');
 
 		if (dropzoneElement) {
+			dropzoneElement?.removeEventListener('dragenter', onDragEnter);
 			dropzoneElement?.removeEventListener('dragover', onDragOver);
 			dropzoneElement?.removeEventListener('drop', onDrop);
 			dropzoneElement?.removeEventListener('dragleave', onDragLeave);
