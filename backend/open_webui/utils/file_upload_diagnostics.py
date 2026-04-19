@@ -190,6 +190,26 @@ def classify_file_upload_error(
     if existing is not None:
         return existing
 
+    from open_webui.retrieval.utils import ChunkTooLargeError
+
+    if isinstance(error, ChunkTooLargeError):
+        is_admin = getattr(user, "role", None) == "admin"
+        return make_file_upload_diagnostic(
+            "embedding_chunk_too_large",
+            title="Chunk exceeds embedding model limit",
+            message=(
+                "A single text chunk was rejected by the embedding service even after "
+                "splitting the batch to one item. This usually means the chunk exceeds "
+                "the embedding model's input token limit."
+            ),
+            hint=(
+                "Go to Admin → Settings → Documents, reduce Chunk Size "
+                "(and optionally Chunk Overlap), then re-upload this file."
+                if is_admin
+                else "Ask an administrator to reduce the document chunk size."
+            ),
+        )
+
     if is_archive_file(filename, content_type):
         return make_archive_diagnostic(filename)
 

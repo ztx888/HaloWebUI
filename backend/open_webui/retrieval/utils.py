@@ -47,6 +47,39 @@ log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["RAG"])
 
 
+class BatchTooLargeError(RuntimeError):
+    """Embedding provider rejected a batch as too large. Safe to split and retry."""
+
+
+class ChunkTooLargeError(RuntimeError):
+    """A single chunk was rejected even after splitting to size 1.
+    Caller must NOT retry; user must lower the document chunk size."""
+
+
+def _call_with_batch_split(texts, call_once):
+    """Invoke call_once(texts); on BatchTooLargeError, recursively split in half.
+    If a size-1 batch is still rejected, raise ChunkTooLargeError instead."""
+    try:
+        return call_once(texts)
+    except BatchTooLargeError as exc:
+        if len(texts) <= 1:
+            raise ChunkTooLargeError(
+                "A single chunk was rejected by the embedding provider even at "
+                "batch size 1, indicating the chunk exceeds the model's input "
+                f"token limit. Original: {exc}"
+            ) from exc
+        mid = len(texts) // 2
+        log.warning(
+            "Embedding batch of %d rejected as too large, splitting into %d + %d and retrying",
+            len(texts),
+            mid,
+            len(texts) - mid,
+        )
+        return _call_with_batch_split(texts[:mid], call_once) + _call_with_batch_split(
+            texts[mid:], call_once
+        )
+
+
 from typing import Any
 
 from langchain_core.callbacks import CallbackManagerForRetrieverRun
@@ -479,11 +512,12 @@ def get_embedding_function(
                 def run_batch(index_and_batch):
                     i, batch = index_and_batch
                     try:
-                        batch_result = func(
+                        batch_result = _call_with_batch_split(
                             batch,
-                            prefix=prefix,
-                            user=user,
+                            lambda sub: func(sub, prefix=prefix, user=user),
                         )
+                    except ChunkTooLargeError:
+                        raise
                     except Exception as exc:
                         raise RuntimeError(
                             f"Embedding generation failed for batch starting at index {i}: "
@@ -783,6 +817,19 @@ def generate_openai_batch_embeddings(
             json=json_data,
             timeout=60,
         )
+        if r.status_code == 413:
+            raise BatchTooLargeError(
+                build_error_detail(read_requests_error_payload(r), r.reason)
+            )
+        if r.status_code == 400:
+            payload_text = str(read_requests_error_payload(r)).lower()
+            if (
+                ("batch size" in payload_text and "maximum" in payload_text)
+                or "too many inputs" in payload_text
+            ):
+                raise BatchTooLargeError(
+                    build_error_detail(read_requests_error_payload(r), r.reason)
+                )
         if not r.ok:
             raise RuntimeError(build_error_detail(read_requests_error_payload(r), r.reason))
         data = r.json()
@@ -790,6 +837,8 @@ def generate_openai_batch_embeddings(
             return [elem["embedding"] for elem in data["data"]]
         else:
             raise RuntimeError("Embedding API returned no embedding data.")
+    except BatchTooLargeError:
+        raise
     except Exception as e:
         log.exception(f"Error generating openai batch embeddings: {e}")
         raise RuntimeError(build_error_detail(e)) from e

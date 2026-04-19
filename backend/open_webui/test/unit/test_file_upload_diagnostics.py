@@ -99,6 +99,98 @@ def test_classify_file_upload_error_preserves_provider_chain_failure_message():
     assert "local_default" in diagnostic["message"]
 
 
+def test_classify_file_upload_error_handles_chunk_too_large_admin():
+    from open_webui.retrieval.utils import ChunkTooLargeError
+
+    diagnostic = classify_file_upload_error(
+        ChunkTooLargeError(
+            "A single chunk was rejected by the embedding provider even at "
+            "batch size 1, indicating the chunk exceeds the model's input "
+            "token limit. Original: simulated"
+        ),
+        filename="paper.pdf",
+        content_type="application/pdf",
+        user=_AdminUser(),
+    )
+
+    assert diagnostic["code"] == "embedding_chunk_too_large"
+    assert diagnostic["title"] == "Chunk exceeds embedding model limit"
+    assert "Chunk Size" in diagnostic["hint"]
+    # Defensive: ensure normalize_file_upload_diagnostic did not fall back to
+    # the generic "Please try again later." placeholder.
+    assert "Please try again later" not in diagnostic["hint"]
+
+
+def test_classify_file_upload_error_handles_chunk_too_large_non_admin():
+    from open_webui.retrieval.utils import ChunkTooLargeError
+
+    diagnostic = classify_file_upload_error(
+        ChunkTooLargeError("A single chunk was rejected..."),
+        filename="paper.pdf",
+        content_type="application/pdf",
+        user=None,
+    )
+
+    assert diagnostic["code"] == "embedding_chunk_too_large"
+    assert "administrator" in diagnostic["hint"].lower()
+    assert "Please try again later" not in diagnostic["hint"]
+
+
+def test_batch_split_recovers_from_batch_too_large():
+    from open_webui.retrieval.utils import (
+        BatchTooLargeError,
+        _call_with_batch_split,
+    )
+
+    call_log: list[int] = []
+
+    def flaky_call(texts):
+        call_log.append(len(texts))
+        if len(texts) > 2:
+            raise BatchTooLargeError("simulated 413")
+        return [f"vec-{t}" for t in texts]
+
+    result = _call_with_batch_split(["a", "b", "c", "d"], flaky_call)
+
+    assert result == ["vec-a", "vec-b", "vec-c", "vec-d"]
+    # First attempt with 4 fails, then two halves of 2 succeed.
+    assert call_log == [4, 2, 2]
+
+
+def test_batch_split_terminates_at_size_one_with_chunk_too_large():
+    import pytest
+    from open_webui.retrieval.utils import (
+        BatchTooLargeError,
+        ChunkTooLargeError,
+        _call_with_batch_split,
+    )
+
+    def always_reject(texts):
+        raise BatchTooLargeError("simulated 413 always")
+
+    with pytest.raises(ChunkTooLargeError) as excinfo:
+        _call_with_batch_split(["a", "b", "c"], always_reject)
+
+    assert "batch size 1" in str(excinfo.value)
+
+
+def test_batch_split_does_not_trigger_on_other_errors():
+    import pytest
+    from open_webui.retrieval.utils import _call_with_batch_split
+
+    call_count: list[int] = []
+
+    def auth_failure(texts):
+        call_count.append(1)
+        raise RuntimeError("401 Unauthorized")
+
+    with pytest.raises(RuntimeError, match="401"):
+        _call_with_batch_split(["a", "b", "c"], auth_failure)
+
+    # Must not split on non-batch-size errors: single call only.
+    assert len(call_count) == 1
+
+
 def test_cleanup_failed_uploaded_file_removes_collection_record_and_storage(monkeypatch):
     events: list[tuple[str, str]] = []
 

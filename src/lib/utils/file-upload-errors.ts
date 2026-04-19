@@ -121,6 +121,13 @@ const getDiagnosticKeys = (code: string): Record<string, string | null> | null =
 				message: 'The system could not build retrieval indexes for this file.',
 				hint: null
 			};
+		case 'embedding_chunk_too_large':
+			return {
+				title: 'Chunk exceeds embedding model limit',
+				message:
+					"A single text chunk was rejected by the embedding service even after splitting the batch to one item. This usually means the chunk exceeds the embedding model's input token limit.",
+				hint: null
+			};
 		case 'file_processing_failed':
 			return {
 				title: 'File processing failed',
@@ -153,6 +160,12 @@ const getEmbeddingServiceHintKey = (code: string, isAdmin: boolean): string | nu
 		return isAdmin
 			? 'Check the embedding model endpoint or network connection in /settings/documents, then try again.'
 			: 'Ask an administrator to check the document retrieval service endpoint.';
+	}
+
+	if (code === 'embedding_chunk_too_large') {
+		return isAdmin
+			? 'Go to Admin → Settings → Documents, reduce Chunk Size (and optionally Chunk Overlap), then re-upload this file.'
+			: 'Ask an administrator to reduce the document chunk size.';
 	}
 
 	return null;

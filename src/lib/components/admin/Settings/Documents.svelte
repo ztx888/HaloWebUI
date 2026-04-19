@@ -2142,6 +2142,12 @@
 												step="1"
 											/>
 										</div>
+										<div class="text-xs text-gray-400 dark:text-gray-500">
+											{tr(
+												'不同嵌入服务商对单次请求可打包的文本条数有不同上限。若上传文件时收到 "Request Entity Too Large" 或 "batch size exceeds maximum" 类错误，请将此值改小后重试。常见安全起点为 16–32。',
+												'Different embedding providers have different per-request limits on the number of texts. If uploads fail with "Request Entity Too Large" or "batch size exceeds maximum", lower this value and retry. A common safe starting point is 16–32.'
+											)}
+										</div>
 										<div class="flex items-center justify-between gap-4">
 											<div>
 												<div class="text-xs font-medium text-gray-500 dark:text-gray-400">
