@@ -1,6 +1,12 @@
 <script lang="ts">
 	import type { Writable } from 'svelte/store';
-	import { getRAGConfig, updateRAGConfig } from '$lib/apis/retrieval';
+	import {
+		getRAGConfig,
+		updateRAGConfig,
+		verifyTavilyWebConfig,
+		type TavilyConfigVerifyItem,
+		type TavilyConfigVerifyResponse
+	} from '$lib/apis/retrieval';
 	import { getTaskConfig, updateTaskConfig } from '$lib/apis';
 	import Switch from '$lib/components/common/Switch.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
@@ -137,6 +143,9 @@
 			firecrawl: ''
 		}
 	};
+	let tavilyVerifyLoading = false;
+	let tavilyVerifyResult: TavilyConfigVerifyResponse | null = null;
+	let lastTavilyVerifyFingerprint = '';
 
 	// Task config for query generation toggles
 	let enableSearchQueryGeneration = true;
@@ -160,6 +169,16 @@
 		forceMode: boolean;
 		previewUrl: string;
 		error: string | null;
+	};
+	type TavilyVerifyFingerprint = {
+		WEB_SEARCH_ENGINE: string;
+		WEB_LOADER_ENGINE: string;
+		TAVILY_API_KEY: string;
+		TAVILY_SEARCH_API_BASE_URL: string;
+		TAVILY_SEARCH_API_FORCE_MODE: boolean;
+		TAVILY_EXTRACT_API_BASE_URL: string;
+		TAVILY_EXTRACT_API_FORCE_MODE: boolean;
+		TAVILY_EXTRACT_DEPTH: string;
 	};
 
 	const NUMERIC_FIELD_LABEL_KEYS: Record<NumericFieldName, string> = {
@@ -501,6 +520,32 @@
 		(webConfig?.WEB_LOADER_ENGINE === 'firecrawl' && !runtimeCapabilities.firecrawl_available);
 	$: tavilySearchUrlState = parseTavilyUrlInput(tavilySearchBaseUrlInput, 'search');
 	$: tavilyExtractUrlState = parseTavilyUrlInput(tavilyExtractBaseUrlInput, 'extract');
+	$: shouldShowTavilyVerify =
+		Boolean(webConfig) &&
+		(webConfig?.WEB_SEARCH_ENGINE === 'tavily' || webConfig?.WEB_LOADER_ENGINE === 'tavily');
+	$: tavilyVerifyFingerprint = webConfig
+		? JSON.stringify({
+				WEB_SEARCH_ENGINE: String(webConfig.WEB_SEARCH_ENGINE || ''),
+				WEB_LOADER_ENGINE: String(webConfig.WEB_LOADER_ENGINE || ''),
+				TAVILY_API_KEY: String(webConfig.TAVILY_API_KEY || '').trim(),
+				TAVILY_SEARCH_API_BASE_URL: tavilySearchUrlState.baseUrl,
+				TAVILY_SEARCH_API_FORCE_MODE: tavilySearchUrlState.forceMode,
+				TAVILY_EXTRACT_API_BASE_URL: tavilyExtractUrlState.baseUrl,
+				TAVILY_EXTRACT_API_FORCE_MODE: tavilyExtractUrlState.forceMode,
+				TAVILY_EXTRACT_DEPTH: String(webConfig.TAVILY_EXTRACT_DEPTH || 'basic')
+			} as TavilyVerifyFingerprint)
+		: '';
+	$: if (!shouldShowTavilyVerify) {
+		tavilyVerifyResult = null;
+		lastTavilyVerifyFingerprint = '';
+	} else if (
+		tavilyVerifyResult &&
+		lastTavilyVerifyFingerprint &&
+		tavilyVerifyFingerprint !== lastTavilyVerifyFingerprint &&
+		!tavilyVerifyLoading
+	) {
+		tavilyVerifyResult = null;
+	}
 
 	let snapshot: ReturnType<typeof buildSnapshot> = null;
 	$: {
@@ -662,6 +707,74 @@
 		}
 	};
 
+	const getTavilyVerifyBadgeClasses = (item: TavilyConfigVerifyItem) => {
+		if (item.ok === true) {
+			return 'border-emerald-200/80 bg-emerald-50/80 text-emerald-700 dark:border-emerald-900/70 dark:bg-emerald-950/30 dark:text-emerald-300';
+		}
+
+		if (item.ok === false) {
+			return 'border-rose-200/80 bg-rose-50/80 text-rose-700 dark:border-rose-900/70 dark:bg-rose-950/30 dark:text-rose-300';
+		}
+
+		return 'border-gray-200/80 bg-white/70 text-gray-500 dark:border-gray-700/70 dark:bg-gray-900/30 dark:text-gray-400';
+	};
+
+	const getTavilyVerifyStatusText = (item: TavilyConfigVerifyItem) => {
+		if (item.ok === true) return tr('可用', 'Available');
+		if (item.ok === false) return tr('不可用', 'Unavailable');
+		return tr('未启用', 'Disabled');
+	};
+
+	const verifyTavilyConfig = async () => {
+		if (!webConfig || tavilyVerifyLoading) return;
+		if (tavilySearchUrlState.error) {
+			toast.error(tavilySearchUrlState.error);
+			return;
+		}
+		if (tavilyExtractUrlState.error) {
+			toast.error(tavilyExtractUrlState.error);
+			return;
+		}
+		if (
+			(webConfig.WEB_SEARCH_ENGINE === 'tavily' || webConfig.WEB_LOADER_ENGINE === 'tavily') &&
+			!String(webConfig.TAVILY_API_KEY || '').trim()
+		) {
+			toast.error($i18n.t('Tavily API Key is required when Tavily search or loader is enabled.'));
+			return;
+		}
+
+		tavilyVerifyLoading = true;
+		try {
+			const result = await verifyTavilyWebConfig(localStorage.token, {
+				WEB_SEARCH_ENGINE: webConfig.WEB_SEARCH_ENGINE,
+				WEB_LOADER_ENGINE: webConfig.WEB_LOADER_ENGINE,
+				TAVILY_API_KEY: String(webConfig.TAVILY_API_KEY || '').trim(),
+				TAVILY_SEARCH_API_BASE_URL: tavilySearchUrlState.baseUrl,
+				TAVILY_SEARCH_API_FORCE_MODE: tavilySearchUrlState.forceMode,
+				TAVILY_EXTRACT_API_BASE_URL: tavilyExtractUrlState.baseUrl,
+				TAVILY_EXTRACT_API_FORCE_MODE: tavilyExtractUrlState.forceMode,
+				TAVILY_EXTRACT_DEPTH: String(webConfig.TAVILY_EXTRACT_DEPTH || 'basic').trim() || 'basic'
+			});
+
+			tavilyVerifyResult = result;
+			lastTavilyVerifyFingerprint = tavilyVerifyFingerprint;
+
+			const enabledItems = [result.search, result.loader].filter((item) => item.enabled);
+			const allPassed = enabledItems.length > 0 && enabledItems.every((item) => item.ok === true);
+
+			if (allPassed) {
+				toast.success(tr('Tavily 配置验证通过', 'Tavily configuration verified successfully.'));
+			} else {
+				toast.warning(tr('Tavily 配置验证完成，请检查失败项', 'Tavily verification completed. Please review the failed items.'));
+			}
+		} catch (error) {
+			console.error('Failed to verify Tavily config', error);
+			toast.error(formatValidationError(error) ?? tr('Tavily 配置验证失败', 'Failed to verify Tavily configuration.'));
+		} finally {
+			tavilyVerifyLoading = false;
+		}
+	};
+
 	onMount(loadConfig);
 
 	const resetSectionChanges = (section: 'webSearch' | 'loader') => {
@@ -777,6 +890,85 @@
 						</div>
 					</div>
 				</section>
+
+				{#if shouldShowTavilyVerify}
+					<section class="glass-section p-5 space-y-4">
+						<div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+							<div class="space-y-1">
+								<div class="text-sm font-medium text-gray-800 dark:text-gray-100">
+									{tr('测试 Tavily 配置', 'Test Tavily Configuration')}
+								</div>
+								<div class="text-xs text-gray-500 dark:text-gray-400">
+									{tr(
+										'直接测试当前输入的 Tavily 搜索和网页提取配置，不会保存也不会改动已生效设置。',
+										'Test the current Tavily search and extract inputs without saving or changing the active configuration.'
+									)}
+								</div>
+							</div>
+							<button
+								type="button"
+								class="inline-flex items-center justify-center gap-2 rounded-xl border border-gray-200/80 bg-white/80 px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 dark:border-gray-700/80 dark:bg-gray-900/70 dark:text-gray-200 dark:hover:bg-gray-800/80 disabled:cursor-not-allowed disabled:opacity-60"
+								on:click={verifyTavilyConfig}
+								disabled={tavilyVerifyLoading}
+							>
+								{#if tavilyVerifyLoading}
+									<Spinner className="size-4" />
+								{/if}
+								<span>
+									{tavilyVerifyLoading
+										? tr('正在测试…', 'Testing...')
+										: tr('测试 Tavily 配置', 'Test Tavily Configuration')}
+								</span>
+							</button>
+						</div>
+
+						{#if tavilyVerifyResult}
+							<div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+								{#if tavilyVerifyResult.search.enabled}
+									<div class={`rounded-2xl border px-4 py-3 ${getTavilyVerifyBadgeClasses(tavilyVerifyResult.search)}`}>
+										<div class="flex items-center justify-between gap-3">
+											<div class="text-sm font-medium">
+												{tr('Tavily 搜索接口', 'Tavily Search API')}
+											</div>
+											<div class="text-xs font-medium">
+												{getTavilyVerifyStatusText(tavilyVerifyResult.search)}
+											</div>
+										</div>
+										<div class="mt-2 text-xs leading-5">
+											{tavilyVerifyResult.search.message}
+										</div>
+										{#if tavilyVerifyResult.search.http_status}
+											<div class="mt-2 text-[11px] opacity-80">
+												HTTP {tavilyVerifyResult.search.http_status}
+											</div>
+										{/if}
+									</div>
+								{/if}
+
+								{#if tavilyVerifyResult.loader.enabled}
+									<div class={`rounded-2xl border px-4 py-3 ${getTavilyVerifyBadgeClasses(tavilyVerifyResult.loader)}`}>
+										<div class="flex items-center justify-between gap-3">
+											<div class="text-sm font-medium">
+												{tr('Tavily 网页提取接口', 'Tavily Extract API')}
+											</div>
+											<div class="text-xs font-medium">
+												{getTavilyVerifyStatusText(tavilyVerifyResult.loader)}
+											</div>
+										</div>
+										<div class="mt-2 text-xs leading-5">
+											{tavilyVerifyResult.loader.message}
+										</div>
+										{#if tavilyVerifyResult.loader.http_status}
+											<div class="mt-2 text-[11px] opacity-80">
+												HTTP {tavilyVerifyResult.loader.http_status}
+											</div>
+										{/if}
+									</div>
+								{/if}
+							</div>
+						{/if}
+					</section>
+				{/if}
 
 				{#if loading}
 				<div class="flex justify-center py-16">

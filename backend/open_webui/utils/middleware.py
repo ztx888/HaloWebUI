@@ -2536,6 +2536,48 @@ async def chat_completion_tools_handler(
 async def chat_web_search_handler(
     request: Request, form_data: dict, extra_params: dict, user
 ):
+    def build_tavily_loader_fallback_notification(notice: dict) -> tuple[str, str] | None:
+        if not isinstance(notice, dict):
+            return None
+        if notice.get("type") != "tavily_loader_auth_fallback":
+            return None
+
+        is_admin = str(getattr(user, "role", "") or "").strip().lower() == "admin"
+        fallback_succeeded = bool(notice.get("fallback_succeeded"))
+        used_direct_docs = bool(notice.get("used_direct_docs"))
+
+        if fallback_succeeded:
+            if is_admin:
+                return (
+                    "warning",
+                    "Tavily 网页加载器鉴权失败，已临时切换备用方式。请到管理后台的联网搜索设置检查 Tavily API Key 和 Extract Base URL。",
+                )
+            return (
+                "warning",
+                "联网资料抓取服务暂时不可用，已自动切换备用方式继续回答，结果可能较少。",
+            )
+
+        if used_direct_docs:
+            if is_admin:
+                return (
+                    "warning",
+                    "Tavily 网页加载器鉴权失败，已尝试备用方式但仍无法抓取网页正文。本次将改用搜索摘要继续回答，请检查 Tavily API Key 和 Extract Base URL。",
+                )
+            return (
+                "warning",
+                "网页内容抓取失败，已尝试备用方式仍未成功。本次将改用搜索摘要继续回答，结果可能较少。",
+            )
+
+        if is_admin:
+            return (
+                "error",
+                "Tavily 网页加载器鉴权失败，已尝试备用方式仍未成功，本次无法获取网页正文。请到管理后台的联网搜索设置检查 Tavily API Key 和 Extract Base URL。",
+            )
+        return (
+            "error",
+            "网页内容抓取失败，已尝试备用方式仍未成功。",
+        )
+
     event_emitter = extra_params["__event_emitter__"]
     await event_emitter(
         {
@@ -2598,6 +2640,7 @@ async def chat_web_search_handler(
         return form_data
 
     all_results = []
+    emitted_loader_runtime_notices = set()
 
     for searchQuery in queries:
         await event_emitter(
@@ -2624,6 +2667,23 @@ async def chat_web_search_handler(
             )
 
             if results:
+                runtime_notice = results.get("loader_runtime_notice")
+                notification = build_tavily_loader_fallback_notification(runtime_notice)
+                if notification is not None:
+                    notice_key = json.dumps(runtime_notice, sort_keys=True, ensure_ascii=False)
+                    if notice_key not in emitted_loader_runtime_notices:
+                        emitted_loader_runtime_notices.add(notice_key)
+                        level, content = notification
+                        await event_emitter(
+                            {
+                                "type": "notification",
+                                "data": {
+                                    "type": level,
+                                    "content": content,
+                                },
+                            }
+                        )
+
                 all_results.append(results)
                 files = form_data.get("files", [])
 

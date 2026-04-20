@@ -1,5 +1,6 @@
-import requests
+import json
 import logging
+import requests
 from typing import Iterator, List, Literal, Optional, Union
 
 from langchain_core.document_loaders import BaseLoader
@@ -9,6 +10,48 @@ from open_webui.retrieval.web.tavily import build_tavily_api_url
 
 log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["RAG"])
+
+
+class TavilyExtractError(Exception):
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: Optional[int] = None,
+        response_text: Optional[str] = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.response_text = response_text
+
+
+class TavilyExtractAuthError(TavilyExtractError):
+    pass
+
+
+def _extract_tavily_error_text(response: requests.Response) -> str:
+    try:
+        payload = response.json()
+        if isinstance(payload, dict):
+            candidate = payload.get("detail") or payload.get("message") or payload.get(
+                "error"
+            )
+            if isinstance(candidate, dict):
+                candidate = (
+                    candidate.get("message")
+                    or candidate.get("detail")
+                    or json.dumps(candidate, ensure_ascii=False)
+                )
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+    except Exception:
+        pass
+
+    text = str(getattr(response, "text", "") or "").strip()
+    if text:
+        return text[:500]
+
+    return f"HTTP {response.status_code}"
 
 
 class TavilyLoader(BaseLoader):
@@ -76,7 +119,18 @@ class TavilyLoader(BaseLoader):
                 payload = {"urls": urls_param, "extract_depth": self.extract_depth}
                 # Make the API call
                 response = requests.post(self.api_url, headers=headers, json=payload)
-                response.raise_for_status()
+                if response.status_code >= 400:
+                    error_text = _extract_tavily_error_text(response)
+                    error_cls = (
+                        TavilyExtractAuthError
+                        if response.status_code in (401, 403)
+                        else TavilyExtractError
+                    )
+                    raise error_cls(
+                        f"Tavily extract request failed: {error_text}",
+                        status_code=response.status_code,
+                        response_text=error_text,
+                    )
                 response_data = response.json()
                 # Process successful results
                 for result in response_data.get("results", []):
@@ -95,6 +149,8 @@ class TavilyLoader(BaseLoader):
                     url = failed.get("url", "")
                     error = failed.get("error", "Unknown error")
                     log.error(f"Failed to extract content from {url}: {error}")
+            except TavilyExtractAuthError:
+                raise
             except Exception as e:
                 if self.continue_on_failure:
                     log.error(f"Error extracting content from batch {batch_urls}: {e}")

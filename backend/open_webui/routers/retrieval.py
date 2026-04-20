@@ -7,7 +7,7 @@ import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Iterator, List, Literal, Optional, Sequence, Union
+from typing import Any, Iterator, List, Literal, Optional, Sequence, Union
 from urllib.parse import urlparse
 
 from fastapi import (
@@ -42,6 +42,10 @@ from open_webui.storage.provider import Storage
 from open_webui.retrieval.vector.connector import VECTOR_DB_CLIENT
 
 from open_webui.retrieval.loaders.youtube import YoutubeLoader
+from open_webui.retrieval.loaders.tavily import (
+    TavilyExtractAuthError,
+    TavilyLoader,
+)
 
 # Web search engines
 from open_webui.retrieval.web.main import SearchResult
@@ -143,6 +147,104 @@ def _normalize_tavily_config_url(
         ) from exc
 
 
+def _extract_http_status_from_exception(exc: Exception) -> Optional[int]:
+    status_code = getattr(exc, "status_code", None)
+    if isinstance(status_code, int):
+        return status_code
+
+    response = getattr(exc, "response", None)
+    response_status = getattr(response, "status_code", None)
+    if isinstance(response_status, int):
+        return response_status
+
+    return None
+
+
+def _extract_error_text_from_exception(exc: Exception) -> str:
+    response_text = str(getattr(exc, "response_text", "") or "").strip()
+    if response_text:
+        return response_text
+
+    response = getattr(exc, "response", None)
+    if response is not None:
+        try:
+            payload = response.json()
+            if isinstance(payload, dict):
+                candidate = (
+                    payload.get("detail") or payload.get("message") or payload.get("error")
+                )
+                if isinstance(candidate, dict):
+                    candidate = (
+                        candidate.get("message")
+                        or candidate.get("detail")
+                        or json.dumps(candidate, ensure_ascii=False)
+                    )
+                if isinstance(candidate, str) and candidate.strip():
+                    return candidate.strip()
+        except Exception:
+            pass
+
+        text = str(getattr(response, "text", "") or "").strip()
+        if text:
+            return text[:500]
+
+    message = str(exc).strip()
+    return message[:500] if message else "Unknown error"
+
+
+def _build_tavily_verify_item(
+    *,
+    enabled: bool,
+    ok: Optional[bool],
+    message: str,
+    http_status: Optional[int] = None,
+) -> dict[str, Any]:
+    item: dict[str, Any] = {
+        "enabled": enabled,
+        "ok": ok,
+        "message": message,
+    }
+    if http_status is not None:
+        item["http_status"] = http_status
+    return item
+
+
+def _build_tavily_loader_runtime_notice(
+    *,
+    fallback_succeeded: bool,
+    used_direct_docs: bool = False,
+    status_code: Optional[int] = None,
+) -> dict[str, Any]:
+    notice: dict[str, Any] = {
+        "type": "tavily_loader_auth_fallback",
+        "fallback_succeeded": fallback_succeeded,
+        "used_direct_docs": used_direct_docs,
+        "primary_loader_engine": "tavily",
+        "fallback_loader_engine": "safe_web",
+    }
+    if status_code is not None:
+        notice["status_code"] = status_code
+    return notice
+
+
+async def _load_web_documents_with_loader(
+    request: Request,
+    urls: Sequence[str],
+    *,
+    loader_engine: Optional[str] = None,
+) -> list[Document]:
+    from open_webui.retrieval.web.utils import get_web_loader
+
+    loader = get_web_loader(
+        urls,
+        verify_ssl=request.app.state.config.ENABLE_WEB_LOADER_SSL_VERIFICATION,
+        requests_per_second=request.app.state.config.WEB_SEARCH_CONCURRENT_REQUESTS,
+        trust_env=request.app.state.config.WEB_SEARCH_TRUST_ENV,
+        loader_engine=loader_engine,
+    )
+    return await loader.aload()
+
+
 def _log_text_content_summary(
     context: str,
     *,
@@ -181,6 +283,17 @@ class ProcessUrlForm(CollectionNameForm):
 
 class SearchForm(BaseModel):
     query: str
+
+
+class WebConfigVerifyForm(BaseModel):
+    WEB_SEARCH_ENGINE: Optional[str] = None
+    WEB_LOADER_ENGINE: Optional[str] = None
+    TAVILY_API_KEY: Optional[str] = None
+    TAVILY_SEARCH_API_BASE_URL: Optional[str] = None
+    TAVILY_SEARCH_API_FORCE_MODE: Optional[bool] = False
+    TAVILY_EXTRACT_API_BASE_URL: Optional[str] = None
+    TAVILY_EXTRACT_API_FORCE_MODE: Optional[bool] = False
+    TAVILY_EXTRACT_DEPTH: Optional[str] = None
 
 
 @router.get("/")
@@ -1217,6 +1330,112 @@ async def update_rag_config(
             )
 
     return await get_rag_config(request, user)
+
+
+@router.post("/config/web/verify")
+async def verify_web_config(
+    form_data: WebConfigVerifyForm,
+    user=Depends(get_admin_user),
+):
+    del user
+
+    search_enabled = str(form_data.WEB_SEARCH_ENGINE or "").strip() == "tavily"
+    loader_enabled = str(form_data.WEB_LOADER_ENGINE or "").strip() == "tavily"
+    api_key = str(form_data.TAVILY_API_KEY or "").strip()
+
+    if search_enabled:
+        if not api_key:
+            search_result = _build_tavily_verify_item(
+                enabled=True,
+                ok=False,
+                message="请先填写 Tavily API Key。",
+            )
+        else:
+            normalized_url, force_mode = _normalize_tavily_config_url(
+                form_data.TAVILY_SEARCH_API_BASE_URL,
+                "search",
+                force_mode=bool(form_data.TAVILY_SEARCH_API_FORCE_MODE),
+            )
+            try:
+                search_tavily(
+                    api_key=api_key,
+                    query="OpenAI",
+                    count=1,
+                    api_base_url=normalized_url,
+                    force_mode=force_mode,
+                )
+                search_result = _build_tavily_verify_item(
+                    enabled=True,
+                    ok=True,
+                    message="Tavily 搜索接口可用。",
+                )
+            except Exception as exc:
+                search_result = _build_tavily_verify_item(
+                    enabled=True,
+                    ok=False,
+                    message=f"Tavily 搜索接口不可用：{_extract_error_text_from_exception(exc)}",
+                    http_status=_extract_http_status_from_exception(exc),
+                )
+    else:
+        search_result = _build_tavily_verify_item(
+            enabled=False,
+            ok=None,
+            message="未启用 Tavily 搜索接口。",
+        )
+
+    if loader_enabled:
+        if not api_key:
+            loader_result = _build_tavily_verify_item(
+                enabled=True,
+                ok=False,
+                message="请先填写 Tavily API Key。",
+            )
+        else:
+            normalized_url, force_mode = _normalize_tavily_config_url(
+                form_data.TAVILY_EXTRACT_API_BASE_URL,
+                "extract",
+                force_mode=bool(form_data.TAVILY_EXTRACT_API_FORCE_MODE),
+            )
+            try:
+                loader = TavilyLoader(
+                    urls="https://example.com/",
+                    api_key=api_key,
+                    extract_depth=str(form_data.TAVILY_EXTRACT_DEPTH or "basic"),
+                    continue_on_failure=False,
+                    api_base_url=normalized_url,
+                    force_mode=force_mode,
+                )
+                docs = list(loader.lazy_load())
+                if docs:
+                    loader_result = _build_tavily_verify_item(
+                        enabled=True,
+                        ok=True,
+                        message="Tavily 网页提取接口可用。",
+                    )
+                else:
+                    loader_result = _build_tavily_verify_item(
+                        enabled=True,
+                        ok=False,
+                        message="Tavily 网页提取接口已响应，但没有返回网页正文。",
+                    )
+            except Exception as exc:
+                loader_result = _build_tavily_verify_item(
+                    enabled=True,
+                    ok=False,
+                    message=f"Tavily 网页提取接口不可用：{_extract_error_text_from_exception(exc)}",
+                    http_status=_extract_http_status_from_exception(exc),
+                )
+    else:
+        loader_result = _build_tavily_verify_item(
+            enabled=False,
+            ok=None,
+            message="未启用 Tavily 网页提取接口。",
+        )
+
+    return {
+        "search": search_result,
+        "loader": loader_result,
+    }
 
 ####################################
 #
@@ -2376,13 +2595,10 @@ async def process_web_search(
     request: Request, form_data: SearchForm, user=Depends(get_verified_user)
 ):
     engine = str(request.app.state.config.WEB_SEARCH_ENGINE or "").strip()
+    loader_engine = str(request.app.state.config.WEB_LOADER_ENGINE or "").strip()
     try:
-        logging.info(
-            f"trying to web search with {engine, form_data.query}"
-        )
-        web_results = _fill_favicons(search_web(
-            request, engine, form_data.query
-        ))
+        logging.info(f"trying to web search with {engine, form_data.query}")
+        web_results = _fill_favicons(search_web(request, engine, form_data.query))
     except Exception as e:
         log.exception(e)
 
@@ -2394,7 +2610,12 @@ async def process_web_search(
     _log_web_results_summary(engine, web_results)
 
     try:
-        urls = [str(result.link or "").strip() for result in web_results if str(result.link or "").strip()]
+        loader_runtime_notice = None
+        urls = [
+            str(result.link or "").strip()
+            for result in web_results
+            if str(result.link or "").strip()
+        ]
         if not urls:
             direct_docs = _build_direct_docs_from_web_results(
                 form_data.query,
@@ -2417,21 +2638,95 @@ async def process_web_search(
                 "direct_content_only": True,
             }
 
-        from open_webui.retrieval.web.utils import get_web_loader
+        try:
+            docs = await _load_web_documents_with_loader(request, urls)
+        except TavilyExtractAuthError as exc:
+            if engine == "tavily" or loader_engine != "tavily":
+                raise
 
-        loader = get_web_loader(
-            urls,
-            verify_ssl=request.app.state.config.ENABLE_WEB_LOADER_SSL_VERIFICATION,
-            requests_per_second=request.app.state.config.WEB_SEARCH_CONCURRENT_REQUESTS,
-            trust_env=request.app.state.config.WEB_SEARCH_TRUST_ENV,
-        )
-        docs = await loader.aload()
+            status_code = _extract_http_status_from_exception(exc)
+            log.warning(
+                "Tavily loader auth failed during web search; retrying once with safe_web "
+                "(query=%s, status=%s)",
+                form_data.query,
+                status_code,
+            )
+
+            try:
+                docs = await _load_web_documents_with_loader(
+                    request,
+                    urls,
+                    loader_engine="safe_web",
+                )
+            except Exception as fallback_exc:
+                log.warning(
+                    "Safe web loader retry failed after Tavily auth error "
+                    "(query=%s, error=%s)",
+                    form_data.query,
+                    _extract_error_text_from_exception(fallback_exc),
+                )
+                direct_docs = _build_direct_docs_from_web_results(
+                    form_data.query,
+                    web_results,
+                    engine,
+                )
+                loader_runtime_notice = _build_tavily_loader_runtime_notice(
+                    fallback_succeeded=False,
+                    used_direct_docs=direct_docs is not None,
+                    status_code=status_code,
+                )
+                if direct_docs is not None:
+                    direct_docs["loader_runtime_notice"] = loader_runtime_notice
+                    return direct_docs
+
+                return {
+                    "status": True,
+                    "collection_name": None,
+                    "filenames": [],
+                    "docs": [],
+                    "loaded_count": 0,
+                    "failed_count": 0,
+                    "direct_content_only": True,
+                    "loader_runtime_notice": loader_runtime_notice,
+                }
+
+            if docs:
+                loader_runtime_notice = _build_tavily_loader_runtime_notice(
+                    fallback_succeeded=True,
+                    status_code=status_code,
+                )
+            else:
+                direct_docs = _build_direct_docs_from_web_results(
+                    form_data.query,
+                    web_results,
+                    engine,
+                )
+                loader_runtime_notice = _build_tavily_loader_runtime_notice(
+                    fallback_succeeded=False,
+                    used_direct_docs=direct_docs is not None,
+                    status_code=status_code,
+                )
+                if direct_docs is not None:
+                    direct_docs["loader_runtime_notice"] = loader_runtime_notice
+                    return direct_docs
+
+                return {
+                    "status": True,
+                    "collection_name": None,
+                    "filenames": [],
+                    "docs": [],
+                    "loaded_count": 0,
+                    "failed_count": 0,
+                    "direct_content_only": True,
+                    "loader_runtime_notice": loader_runtime_notice,
+                }
+
         urls = [
             doc.metadata["source"] for doc in docs
         ]  # only keep URLs which could be retrieved
 
         if request.app.state.config.BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL:
-            return {
+            result = {
                 "status": True,
                 "collection_name": None,
                 "filenames": urls,
@@ -2444,6 +2739,9 @@ async def process_web_search(
                 ],
                 "loaded_count": len(docs),
             }
+            if loader_runtime_notice is not None:
+                result["loader_runtime_notice"] = loader_runtime_notice
+            return result
         else:
             MAX_WEB_PAGE_SIZE = 100_000  # ~100KB, prevent huge pages from blocking embedding
             collection_names = []
@@ -2503,13 +2801,16 @@ async def process_web_search(
                         )
                         failed_count += 1
 
-            return {
+            result = {
                 "status": True,
                 "collection_names": collection_names,
                 "filenames": urls,
                 "loaded_count": len(docs),
                 "failed_count": failed_count,
             }
+            if loader_runtime_notice is not None:
+                result["loader_runtime_notice"] = loader_runtime_notice
+            return result
     except Exception as e:
         log.exception(e)
         raise HTTPException(

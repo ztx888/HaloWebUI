@@ -395,6 +395,20 @@
 	const isOfficialOpenAIHostname = (hostname: string) =>
 		hostname === 'api.openai.com' || hostname.endsWith('.openai.com');
 
+	const normalizeOpenAIUrl = (inputUrl: string): string => {
+		const normalized = normalizeUrl(inputUrl, '/v1');
+		if (!normalized) return '';
+
+		if (!isOfficialOpenAIHostname(getHostname(normalized))) {
+			return normalized;
+		}
+
+		return normalized
+			.replace(/\/openai\/deployments\/[^/?#]+$/, '/v1')
+			.replace(/\/openai\/v1$/, '/v1')
+			.replace(/\/openai$/, '/v1');
+	};
+
 	const getDefaultNativeFileInputsEnabled = () => {
 		if (ollama || direct || anthropic || gemini || grok || azure || isForceMode) {
 			return false;
@@ -419,7 +433,7 @@
 				: url.replace(/\/+$/, '')
 			: azure
 				? normalizeAzureUrl(url)
-				: normalizeUrl(url, '/v1');
+				: normalizeOpenAIUrl(url);
 	$: if (azure) {
 		if (azureApiVersionMode === AZURE_API_VERSION_AUTO) {
 			if (apiVersion !== '') {
@@ -1520,7 +1534,14 @@
 										bind:value={url}
 										on:blur={() => {
 											// Keep provider-specific URLs normalized unless user explicitly disables normalization via '#'.
-											if ((gemini || grok || azure) && !isForceMode && url && url.trim() !== normalizedUrl) {
+											if (
+												!ollama &&
+												!direct &&
+												!anthropic &&
+												!isForceMode &&
+												url &&
+												url.trim() !== normalizedUrl
+											) {
 												url = normalizedUrl;
 											}
 										}}
@@ -1987,7 +2008,12 @@
 											class="px-3 py-1 text-sm bg-gray-100 dark:bg-gray-800 rounded-lg"
 											on:click={() => {
 												providerTypeTouched = true;
-												azure = !azure;
+												const nextAzure = !azure;
+												azure = nextAzure;
+
+												if (!isForceMode && url.trim()) {
+													url = nextAzure ? normalizeAzureUrl(url) : normalizeOpenAIUrl(url);
+												}
 											}}
 										>
 											{azure ? $i18n.t('Azure OpenAI') : $i18n.t('OpenAI')}

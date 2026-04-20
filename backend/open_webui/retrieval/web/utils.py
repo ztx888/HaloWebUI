@@ -24,7 +24,10 @@ import validators
 from langchain_community.document_loaders import WebBaseLoader
 from langchain_community.document_loaders.base import BaseLoader
 from langchain_core.documents import Document
-from open_webui.retrieval.loaders.tavily import TavilyLoader
+from open_webui.retrieval.loaders.tavily import (
+    TavilyExtractAuthError,
+    TavilyLoader,
+)
 from open_webui.constants import ERROR_MESSAGES
 from open_webui.config import (
     ENABLE_RAG_LOCAL_WEB_FETCH,
@@ -361,6 +364,8 @@ class SafeTavilyLoader(BaseLoader, RateLimitMixin, URLProcessingMixin):
                 continue_on_failure=self.continue_on_failure,
             )
             yield from loader.lazy_load()
+        except TavilyExtractAuthError:
+            raise
         except Exception as e:
             if self.continue_on_failure:
                 log.exception(f"Error extracting content from URLs: {e}")
@@ -396,6 +401,8 @@ class SafeTavilyLoader(BaseLoader, RateLimitMixin, URLProcessingMixin):
             )
             async for document in loader.alazy_load():
                 yield document
+        except TavilyExtractAuthError:
+            raise
         except Exception as e:
             if self.continue_on_failure:
                 log.exception(f"Error loading URLs: {e}")
@@ -634,10 +641,16 @@ def get_web_loader(
     verify_ssl: bool = True,
     requests_per_second: int = 2,
     trust_env: bool = False,
+    loader_engine: Optional[str] = None,
 ):
     # Check if the URLs are valid
     safe_urls = safe_validate_urls([urls] if isinstance(urls, str) else urls)
     WebLoaderClass = None
+    effective_loader_engine = (
+        str(loader_engine).strip()
+        if loader_engine is not None
+        else str(WEB_LOADER_ENGINE.value or "").strip()
+    )
 
     web_loader_args = {
         "web_paths": safe_urls,
@@ -647,22 +660,22 @@ def get_web_loader(
         "trust_env": trust_env,
     }
 
-    if WEB_LOADER_ENGINE.value == "" or WEB_LOADER_ENGINE.value == "safe_web":
+    if effective_loader_engine == "" or effective_loader_engine == "safe_web":
         WebLoaderClass = SafeWebBaseLoader
-    elif WEB_LOADER_ENGINE.value == "playwright":
+    elif effective_loader_engine == "playwright":
         WebLoaderClass = SafePlaywrightURLLoader
         web_loader_args["playwright_timeout"] = PLAYWRIGHT_TIMEOUT.value * 1000
         if PLAYWRIGHT_WS_URL.value:
             web_loader_args["playwright_ws_url"] = PLAYWRIGHT_WS_URL.value
 
-    elif WEB_LOADER_ENGINE.value == "firecrawl":
+    elif effective_loader_engine == "firecrawl":
         WebLoaderClass = SafeFireCrawlLoader
         web_loader_args["api_key"] = FIRECRAWL_API_KEY.value
         web_loader_args["api_url"] = FIRECRAWL_API_BASE_URL.value
         if FIRECRAWL_TIMEOUT.value:
             web_loader_args["timeout"] = FIRECRAWL_TIMEOUT.value
 
-    elif WEB_LOADER_ENGINE.value == "tavily":
+    elif effective_loader_engine == "tavily":
         WebLoaderClass = SafeTavilyLoader
         web_loader_args["api_key"] = TAVILY_API_KEY.value
         web_loader_args["api_base_url"] = TAVILY_EXTRACT_API_BASE_URL.value
@@ -681,6 +694,6 @@ def get_web_loader(
         return web_loader
     else:
         raise ValueError(
-            f"Invalid WEB_LOADER_ENGINE: {WEB_LOADER_ENGINE.value}. "
+            f"Invalid WEB_LOADER_ENGINE: {effective_loader_engine}. "
             "Please set it to 'safe_web', 'playwright', 'firecrawl', or 'tavily'."
         )

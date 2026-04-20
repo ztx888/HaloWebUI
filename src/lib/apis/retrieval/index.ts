@@ -114,6 +114,18 @@ type RAGConfigForm = {
 	[key: string]: unknown;
 };
 
+export type TavilyConfigVerifyItem = {
+	enabled: boolean;
+	ok: boolean | null;
+	message: string;
+	http_status?: number;
+};
+
+export type TavilyConfigVerifyResponse = {
+	search: TavilyConfigVerifyItem;
+	loader: TavilyConfigVerifyItem;
+};
+
 export const updateRAGConfig = async (token: string, payload: RAGConfigForm) => {
 	let error = null;
 
@@ -126,6 +138,34 @@ export const updateRAGConfig = async (token: string, payload: RAGConfigForm) => 
 		body: JSON.stringify({
 			...payload
 		})
+	})
+		.then(parseJsonResponse)
+		.catch((err) => {
+			console.log(err);
+			error = err.detail;
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};
+
+export const verifyTavilyWebConfig = async (
+	token: string,
+	payload: Record<string, unknown>
+): Promise<TavilyConfigVerifyResponse> => {
+	let error = null;
+
+	const res = await fetch(`${RETRIEVAL_API_BASE_URL}/config/web/verify`, {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json',
+			Authorization: `Bearer ${token}`
+		},
+		body: JSON.stringify(payload)
 	})
 		.then(parseJsonResponse)
 		.catch((err) => {
