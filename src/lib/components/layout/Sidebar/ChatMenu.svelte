@@ -20,7 +20,7 @@
 	} from '$lib/apis/chats';
 	import { settings } from '$lib/stores';
 	import { createMessagesList } from '$lib/utils';
-	import { exportChatPdfFromElement, type ChatPdfExportMode } from '$lib/utils/chat-pdf-export';
+	import type { ChatPdfExportMode } from '$lib/utils/chat-pdf-export';
 
 	const i18n = getContext('i18n');
 
@@ -74,6 +74,14 @@
 		saveAs(blob, `chat-${chat.chat.title}.txt`);
 	};
 
+	const loadPdfExporter = async () => {
+		if (import.meta.env.DEV) {
+			return await import(/* @vite-ignore */ `/src/lib/utils/chat-pdf-export.ts?t=${Date.now()}`);
+		}
+
+		return await import('$lib/utils/chat-pdf-export');
+	};
+
 	const downloadPdf = async () => {
 		const targetChat = await getChatById(localStorage.token, chatId);
 		if (!targetChat?.chat?.history) {
@@ -97,6 +105,7 @@
 		}
 
 		try {
+			const { exportChatPdfFromElement } = await loadPdfExporter();
 			await exportChatPdfFromElement({
 				sourceElement: pdfPreviewContainer,
 				title: targetChat?.chat?.title,

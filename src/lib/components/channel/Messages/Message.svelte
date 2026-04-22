@@ -253,7 +253,7 @@
 							id={message.id}
 							content={message.content}
 						/>{#if message.created_at !== message.updated_at}<span class="text-gray-500 text-[10px]"
-								>(edited)</span
+								>({$i18n.t('edited')})</span
 							>{/if}
 					</div>
 
