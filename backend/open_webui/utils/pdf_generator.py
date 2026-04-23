@@ -171,6 +171,7 @@ class PDFGenerator:
         self._render_markdown_fragment(pdf, content, list_level=0)
 
     def _render_markdown_fragment(self, pdf: FPDF, content: str, *, list_level: int) -> None:
+        content = self._normalize_markdown_for_pdf(content)
         html = markdown.markdown(
             content,
             extensions=self.MARKDOWN_EXTENSIONS,
@@ -178,6 +179,43 @@ class PDFGenerator:
         )
         soup = BeautifulSoup(html, "html.parser")
         self._render_children(pdf, list(soup.children), list_level=list_level)
+
+    def _normalize_markdown_for_pdf(self, content: str) -> str:
+        lines = content.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        normalized_lines: list[str] = []
+        ordered_base_indent: int | None = None
+        ordered_child_indent: int | None = None
+
+        for line in lines:
+            stripped = line.lstrip(" ")
+            indent = len(line) - len(stripped)
+
+            ordered_match = re.match(r"^(\s*)\d+[.)]\s+", line)
+            unordered_match = re.match(r"^(\s*)[-+*]\s+", line)
+
+            if ordered_match:
+                ordered_base_indent = len(ordered_match.group(1))
+                ordered_child_indent = ordered_base_indent + 4
+                normalized_lines.append(line)
+                continue
+
+            if (
+                ordered_base_indent is not None
+                and ordered_child_indent is not None
+                and unordered_match
+                and indent > ordered_base_indent
+                and indent < ordered_child_indent
+            ):
+                normalized_lines.append(" " * ordered_child_indent + stripped)
+                continue
+
+            if stripped and ordered_base_indent is not None and indent <= ordered_base_indent:
+                ordered_base_indent = None
+                ordered_child_indent = None
+
+            normalized_lines.append(line)
+
+        return "\n".join(normalized_lines)
 
     def _render_children(self, pdf: FPDF, children: list[Any], *, list_level: int) -> None:
         for child in children:
@@ -256,10 +294,20 @@ class PDFGenerator:
 
     def _render_paragraph_tag(self, pdf: FPDF, tag: Tag) -> None:
         images = [child for child in tag.children if isinstance(child, Tag) and child.name == "img"]
-        text = self._inline_text(tag, strip_images=True)
+        inline_children = [
+            child
+            for child in tag.children
+            if not (isinstance(child, Tag) and child.name and child.name.lower() == "img")
+        ]
 
-        if text:
-            self._write_paragraph(pdf, text)
+        if self._has_visible_inline_content(inline_children):
+            self._write_inline_block(
+                pdf,
+                inline_children,
+                line_height=self.LINE_HEIGHT,
+                font_size=11,
+            )
+            self._finish_inline_block(pdf, self.LINE_HEIGHT, extra_gap=1)
 
         for image in images:
             self._render_image_from_url(pdf, image.get("src"), alt_text=image.get("alt"))
@@ -289,7 +337,7 @@ class PDFGenerator:
         level: int,
         marker_width: float,
     ) -> None:
-        intro_text = self._extract_list_intro_text(item)
+        intro_nodes = self._extract_list_intro_nodes(item)
         child_blocks = [
             child
             for child in item.children
@@ -302,14 +350,24 @@ class PDFGenerator:
         text_width = max(10, available_width - marker_width)
         line_height = self.LINE_HEIGHT
 
-        if intro_text:
+        if self._has_visible_inline_content(intro_nodes):
             y = pdf.get_y()
+            original_left_margin = pdf.l_margin
             pdf.set_font(self.font_family, "", 11)
             pdf.set_text_color(17, 24, 39)
             pdf.set_xy(start_x, y)
             pdf.multi_cell(marker_width, line_height, marker, align="R", new_x="RIGHT", new_y="TOP")
+            pdf.set_left_margin(start_x + marker_width)
             pdf.set_xy(start_x + marker_width, y)
-            pdf.multi_cell(text_width, line_height, intro_text)
+            self._render_inline_nodes(
+                pdf,
+                intro_nodes,
+                line_height=line_height,
+                font_size=11,
+            )
+            self._finish_inline_block(pdf, line_height, extra_gap=0)
+            pdf.set_left_margin(original_left_margin)
+            pdf.set_x(original_left_margin)
         else:
             pdf.set_x(start_x)
             pdf.multi_cell(available_width, line_height, marker)
@@ -322,19 +380,18 @@ class PDFGenerator:
                     self._render_tag(pdf, child, list_level=level + 1)
 
     def _render_blockquote(self, pdf: FPDF, tag: Tag, *, list_level: int) -> None:
-        text = self._inline_text(tag)
-        if not text:
+        if not self._has_visible_inline_content(list(tag.children)):
             return
 
         pdf.ln(1)
         x = pdf.l_margin + self.LIST_INDENT * list_level
         y = pdf.get_y()
         with self._temporary_indent(pdf, self.BLOCK_INDENT + self.LIST_INDENT * list_level):
-            pdf.set_draw_color(209, 213, 219)
-            pdf.line(x, y, x, y + 12)
             pdf.set_text_color(55, 65, 81)
-            pdf.set_font(self.font_family, "", 10.5)
-            self._write_full_width_block(pdf, self.LINE_HEIGHT, text)
+            self._render_children(pdf, list(tag.children), list_level=list_level)
+            end_y = pdf.get_y()
+            pdf.set_draw_color(209, 213, 219)
+            pdf.line(x, y, x, max(y + 8, end_y))
         pdf.set_text_color(17, 24, 39)
 
     def _render_table(self, pdf: FPDF, tag: Tag) -> None:
@@ -621,6 +678,138 @@ class PDFGenerator:
 
         text = root.get_text(" ", strip=True)
         return self._normalize_text(text)
+
+    def _normalize_inline_text(self, text: str) -> str:
+        normalized = unescape(text or "")
+        normalized = normalized.replace("\r\n", "\n").replace("\r", "\n")
+        normalized = re.sub(r"[ \t\n\f\v]+", " ", normalized)
+        return normalized
+
+    def _merge_font_style(self, current: str, addition: str) -> str:
+        merged = set((current or "").upper())
+        merged.update((addition or "").upper())
+        return "".join(style for style in "BIU" if style in merged)
+
+    def _has_visible_inline_content(self, nodes: list[Any]) -> bool:
+        for node in nodes:
+            if isinstance(node, NavigableString) and self._normalize_inline_text(str(node)).strip():
+                return True
+            if isinstance(node, Tag):
+                if node.name and node.name.lower() == "img":
+                    continue
+                if self._normalize_inline_text(node.get_text(" ", strip=True)).strip():
+                    return True
+        return False
+
+    def _render_inline_nodes(
+        self,
+        pdf: FPDF,
+        nodes: list[Any],
+        *,
+        line_height: float,
+        font_size: float,
+        style: str = "",
+    ) -> None:
+        for node in nodes:
+            if isinstance(node, NavigableString):
+                text = self._normalize_inline_text(str(node))
+                if text:
+                    pdf.set_font(self.font_family, style, font_size)
+                    pdf.write(line_height, text)
+                continue
+
+            if not isinstance(node, Tag):
+                continue
+
+            name = node.name.lower()
+
+            if name == "br":
+                pdf.ln(line_height)
+                pdf.set_x(pdf.l_margin)
+                continue
+
+            if name in {"strong", "b"}:
+                self._render_inline_nodes(
+                    pdf,
+                    list(node.children),
+                    line_height=line_height,
+                    font_size=font_size,
+                    style=self._merge_font_style(style, "B"),
+                )
+                continue
+
+            if name in {"em", "i"}:
+                self._render_inline_nodes(
+                    pdf,
+                    list(node.children),
+                    line_height=line_height,
+                    font_size=font_size,
+                    style=self._merge_font_style(style, "I"),
+                )
+                continue
+
+            if name == "img":
+                continue
+
+            self._render_inline_nodes(
+                pdf,
+                list(node.children),
+                line_height=line_height,
+                font_size=font_size,
+                style=style,
+            )
+
+    def _write_inline_block(
+        self,
+        pdf: FPDF,
+        nodes: list[Any],
+        *,
+        line_height: float,
+        font_size: float,
+        style: str = "",
+    ) -> None:
+        pdf.set_x(pdf.l_margin)
+        self._render_inline_nodes(
+            pdf,
+            nodes,
+            line_height=line_height,
+            font_size=font_size,
+            style=style,
+        )
+
+    def _finish_inline_block(
+        self,
+        pdf: FPDF,
+        line_height: float,
+        *,
+        extra_gap: float = 0,
+    ) -> None:
+        if abs(pdf.get_x() - pdf.l_margin) > 0.1:
+            pdf.ln(line_height)
+        if extra_gap:
+            pdf.ln(extra_gap)
+
+    def _extract_list_intro_nodes(self, item: Tag) -> list[Any]:
+        nodes: list[Any] = []
+
+        for child in item.children:
+            if isinstance(child, NavigableString):
+                if self._normalize_inline_text(str(child)).strip():
+                    nodes.append(child)
+                continue
+
+            if not isinstance(child, Tag):
+                continue
+
+            name = child.name.lower()
+            if name in {"ul", "ol"}:
+                continue
+            if name in {"pre", "blockquote", "table", "details"}:
+                break
+
+            nodes.append(child)
+
+        return nodes
 
     def _extract_list_intro_text(self, item: Tag) -> str:
         parts: list[str] = []

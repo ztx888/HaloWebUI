@@ -95,7 +95,14 @@
 	}
 </script>
 
-<div {id} {dir} class={className}>
+<div
+	{id}
+	{dir}
+	class={className}
+	data-pdf-collapsible="true"
+	data-pdf-open={open ? 'true' : 'false'}
+	data-pdf-type={attributes?.type ?? ''}
+>
 	{#if title !== null}
 		<!-- svelte-ignore a11y-no-static-element-interactions -->
 		<!-- svelte-ignore a11y-click-events-have-key-events -->

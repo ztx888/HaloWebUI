@@ -41,6 +41,58 @@ export type PdfExportMessage = {
 	code_executions?: PdfExportCodeExecution[];
 };
 
+const REASONING_DETAILS_REGEX = /<details\b[^>]*type="reasoning"[^>]*>[\s\S]*?<\/details>/gi;
+const DETAILS_OPEN_TAG_REGEX = /^<details\b[^>]*>/i;
+const DETAILS_SUMMARY_REGEX = /<summary\b[^>]*>[\s\S]*?<\/summary>/i;
+
+const getVisibleMessageReasoningStates = (messageId?: string): boolean[] | null => {
+	if (typeof document === 'undefined' || !messageId) {
+		return null;
+	}
+
+	const messageElement = document.getElementById(`message-${messageId}`);
+	if (!messageElement) {
+		return null;
+	}
+
+	const reasoningBlocks = Array.from(
+		messageElement.querySelectorAll<HTMLElement>(
+			'[data-pdf-collapsible="true"][data-pdf-type="reasoning"]'
+		)
+	);
+
+	if (reasoningBlocks.length === 0) {
+		return null;
+	}
+
+	return reasoningBlocks.map((element) => element.dataset.pdfOpen === 'true');
+};
+
+const applyReasoningVisibilityToContent = (
+	content: string,
+	reasoningStates: boolean[] | null
+): string => {
+	if (!content || !reasoningStates || reasoningStates.length === 0) {
+		return content;
+	}
+
+	let reasoningIndex = 0;
+
+	return content.replace(REASONING_DETAILS_REGEX, (match) => {
+		const isOpen = reasoningStates[reasoningIndex];
+		reasoningIndex += 1;
+
+		if (isOpen !== false) {
+			return match;
+		}
+
+		const openTag = match.match(DETAILS_OPEN_TAG_REGEX)?.[0] ?? '<details type="reasoning">';
+		const summary = match.match(DETAILS_SUMMARY_REGEX)?.[0];
+
+		return [openTag, summary, '</details>'].filter(Boolean).join('\n');
+	});
+};
+
 const normalizeImageFile = (file: any): PdfExportImageFile | null => {
 	if (!file || file.type !== 'image' || typeof file?.url !== 'string' || !file.url) {
 		return null;
@@ -104,33 +156,41 @@ export const buildPdfExportMessages = (chat: any): PdfExportMessage[] => {
 		return [];
 	}
 
-	return createMessagesList(history, history.currentId).map((message: any) => ({
-		...(typeof message?.id === 'string' ? { id: message.id } : {}),
-		role: typeof message?.role === 'string' ? message.role : 'assistant',
-		content: typeof message?.content === 'string' ? message.content : '',
-		...(typeof message?.model === 'string' && message.model ? { model: message.model } : {}),
-		...(typeof message?.timestamp === 'number' ? { timestamp: message.timestamp } : {}),
-		...(typeof message?.completedAt === 'number' ? { completedAt: message.completedAt } : {}),
-		...(typeof message?.instruction === 'string' && message.instruction
-			? { instruction: message.instruction }
-			: {}),
-		...(message?.usage && typeof message.usage === 'object' ? { usage: message.usage } : {}),
-		...(message?.info && typeof message.info === 'object' ? { info: message.info } : {}),
-		...(Array.isArray(message?.files)
-			? {
-					files: message.files
-						.map((file: any) => normalizeImageFile(file))
-						.filter(Boolean) as PdfExportImageFile[]
-				}
-			: {}),
-		...(Array.isArray(message?.code_executions)
-			? {
-					code_executions: message.code_executions
-						.map((execution: any) => normalizeCodeExecution(execution))
-						.filter(Boolean) as PdfExportCodeExecution[]
-				}
-			: {})
-	}));
+	return createMessagesList(history, history.currentId).map((message: any) => {
+		const reasoningStates = getVisibleMessageReasoningStates(message?.id);
+		const content =
+			typeof message?.content === 'string'
+				? applyReasoningVisibilityToContent(message.content, reasoningStates)
+				: '';
+
+		return {
+			...(typeof message?.id === 'string' ? { id: message.id } : {}),
+			role: typeof message?.role === 'string' ? message.role : 'assistant',
+			content,
+			...(typeof message?.model === 'string' && message.model ? { model: message.model } : {}),
+			...(typeof message?.timestamp === 'number' ? { timestamp: message.timestamp } : {}),
+			...(typeof message?.completedAt === 'number' ? { completedAt: message.completedAt } : {}),
+			...(typeof message?.instruction === 'string' && message.instruction
+				? { instruction: message.instruction }
+				: {}),
+			...(message?.usage && typeof message.usage === 'object' ? { usage: message.usage } : {}),
+			...(message?.info && typeof message.info === 'object' ? { info: message.info } : {}),
+			...(Array.isArray(message?.files)
+				? {
+						files: message.files
+							.map((file: any) => normalizeImageFile(file))
+							.filter(Boolean) as PdfExportImageFile[]
+					}
+				: {}),
+			...(Array.isArray(message?.code_executions)
+				? {
+						code_executions: message.code_executions
+							.map((execution: any) => normalizeCodeExecution(execution))
+							.filter(Boolean) as PdfExportCodeExecution[]
+					}
+				: {})
+		};
+	});
 };
 
 export const buildPdfFileName = (title?: string | null) => {
