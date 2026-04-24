@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto'
 import { lookup } from 'node:dns/promises'
-import { openAsBlob } from 'node:fs'
 import { readFile, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 
@@ -156,7 +155,8 @@ async function buildBody(manifest, headers) {
     }
 
     for (const file of manifest.files || []) {
-      const blob = await openAsBlob(file.path, {
+      const fileBytes = await readFile(file.path)
+      const blob = new Blob([fileBytes], {
         type: file.mime || 'application/octet-stream'
       })
       form.append(file.field_name || 'file', blob, file.filename || 'file.bin')

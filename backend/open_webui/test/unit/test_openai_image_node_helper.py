@@ -37,6 +37,13 @@ def test_build_node_openai_image_request_manifest_json():
     assert manifest["response_body_path"] == "/tmp/body.json"
 
 
+def test_node_openai_image_helper_does_not_require_open_as_blob():
+    helper_source = images_router.OPENAI_IMAGE_NODE_HELPER_PATH.read_text(encoding="utf-8")
+
+    assert "openAsBlob" not in helper_source
+    assert "new Blob" in helper_source
+
+
 def test_run_node_openai_image_request_reads_structured_result(tmp_path, monkeypatch):
     helper_path = tmp_path / "openai-image-fetch.mjs"
     helper_path.write_text("// helper placeholder", encoding="utf-8")
