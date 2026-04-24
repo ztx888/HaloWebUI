@@ -128,6 +128,9 @@
 			}).catch(() => []);
 			const preferredId = `${usageConfig?.defaults?.model ?? ''}`.trim();
 			builtinModelMeta =
+				(runtimeModels ?? []).find(
+					(model) => model.id === preferredId && `${model.source ?? ''}`.trim() === 'shared'
+				) ??
 				(runtimeModels ?? []).find((model) => model.id === preferredId) ??
 				(runtimeModels ?? []).find((model) => modelSupportsNativeImageOptions(model)) ??
 				(runtimeModels ?? [])[0] ??

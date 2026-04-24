@@ -121,6 +121,20 @@
 		value: option.value,
 		label: option.label
 	}));
+	const IMAGE_SIZE_OPTIONS = [
+		{
+			value: 'auto',
+			label: tr('自动', '自动'),
+			description: tr('由上游模型或服务自动决定图片尺寸', 'Let the upstream model or service choose the image size'),
+			badge: tr('推荐', 'Recommended')
+		},
+		{ value: '512x512', label: '512 x 512', description: tr('小尺寸，速度更快', 'Small square image, faster generation') },
+		{ value: '1024x1024', label: '1024 x 1024', description: tr('常用正方形尺寸', 'Common square image size') },
+		{ value: '1024x1536', label: '1024 x 1536', description: tr('竖图', 'Portrait image') },
+		{ value: '1536x1024', label: '1536 x 1024', description: tr('横图', 'Landscape image') },
+		{ value: '1792x1024', label: '1792 x 1024', description: tr('宽屏横图', 'Wide landscape image') },
+		{ value: '1024x1792', label: '1024 x 1792', description: tr('长竖图', 'Tall portrait image') }
+	];
 	const isSharedKeyCapableEngine = (engine: string) => ['openai', 'gemini', 'grok'].includes(engine);
 
 	const normalizeImageProviderUrlInput = (inputUrl: string, versionPath: string): string => {
@@ -1543,20 +1557,30 @@
 										/>
 									</div>
 								{:else}
-									<div
-										class="glass-item p-4"
-									>
-										<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">
-											{$i18n.t('Set Image Size')}
+									<div class="glass-item p-4">
+										<div class="flex items-center justify-between gap-3 mb-1.5">
+											<div class="text-xs font-medium text-gray-500 dark:text-gray-400">
+												{$i18n.t('Set Image Size')}
+											</div>
+											<div class="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300">
+												{imageGenerationConfig.IMAGE_SIZE === 'auto' ? tr('自动', '自动') : tr('固定尺寸', '固定尺寸')}
+											</div>
 										</div>
-										<Tooltip content={$i18n.t('Enter Image Size (e.g. 512x512)')} placement="top-start">
-											<input
-												class="w-full py-2 px-3 text-sm dark:text-gray-300 glass-input"
-												placeholder={$i18n.t('Enter Image Size (e.g. 512x512)')}
-												bind:value={imageGenerationConfig.IMAGE_SIZE}
-												required
-											/>
-										</Tooltip>
+										<HaloSelect
+											bind:value={imageGenerationConfig.IMAGE_SIZE}
+											options={IMAGE_SIZE_OPTIONS}
+											placeholder={tr('选择图片尺寸', 'Select image size')}
+											searchEnabled={true}
+											searchPlaceholder={tr('输入自定义尺寸', '输入自定义尺寸')}
+											noResultsText={tr('没有匹配的尺寸', 'No matching size')}
+											allowCustomValue={true}
+											customValueLabel={tr('使用自定义尺寸', 'Use custom size')}
+											className="w-full"
+											contentClassName="!max-w-[24rem]"
+										/>
+										<div class="mt-2 text-xs leading-5 text-gray-400 dark:text-gray-500">
+											{tr('选择自动时，图片尺寸由模型或上游服务决定。', '选择自动时，图片尺寸由模型或上游服务决定。')}
+										</div>
 									</div>
 								{/if}
 							</div>

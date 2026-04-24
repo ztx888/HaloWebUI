@@ -105,7 +105,7 @@ def test_generate_via_openai_images_endpoint_uses_node_helper(monkeypatch):
                 {
                     "data": [
                         {
-                            "b64_json": base64.b64encode(b"generated").decode("utf-8")
+                            "b64_json": base64.b64encode(b"generated" * 32).decode("utf-8")
                         }
                     ]
                 }
@@ -141,6 +141,145 @@ def test_generate_via_openai_images_endpoint_uses_node_helper(monkeypatch):
     assert result == [{"url": "/images/generated.png"}]
 
 
+def test_generate_via_openai_images_endpoint_uses_configured_size(monkeypatch):
+    captured = {}
+
+    async def fake_send(**kwargs):
+        captured.update(kwargs)
+        return {
+            "status": 200,
+            "headers": {"content-type": "application/json"},
+            "response_body": json.dumps(
+                {
+                    "data": [
+                        {
+                            "b64_json": base64.b64encode(b"generated" * 32).decode("utf-8")
+                        }
+                    ]
+                }
+            ),
+        }
+
+    monkeypatch.setattr(images_router, "_send_openai_image_request_via_node", fake_send)
+    monkeypatch.setattr(
+        images_router,
+        "upload_image",
+        lambda request, payload, image_data, content_type, user: "/images/generated.png",
+    )
+
+    asyncio.run(
+        images_router._generate_via_openai_images_endpoint(
+            request=SimpleNamespace(),
+            user=_make_user(),
+            model_id="gpt-image-2",
+            prompt="生成一张图",
+            n=1,
+            size="1024x1024",
+            background=None,
+            source={
+                "base_url": "https://api.openai.com/v1",
+                "key": "sk-test",
+                "api_config": {},
+            },
+        )
+    )
+
+    assert captured["json_body"]["model"] == "gpt-image-2"
+    assert captured["json_body"]["size"] == "1024x1024"
+
+
+def test_generate_via_openai_images_endpoint_strips_connection_prefix(monkeypatch):
+    captured = {}
+
+    async def fake_send(**kwargs):
+        captured.update(kwargs)
+        return {
+            "status": 200,
+            "headers": {"content-type": "application/json"},
+            "response_body": json.dumps(
+                {
+                    "data": [
+                        {
+                            "b64_json": base64.b64encode(b"generated" * 32).decode("utf-8")
+                        }
+                    ]
+                }
+            ),
+        }
+
+    monkeypatch.setattr(images_router, "_send_openai_image_request_via_node", fake_send)
+    monkeypatch.setattr(
+        images_router,
+        "upload_image",
+        lambda request, payload, image_data, content_type, user: "/images/generated.png",
+    )
+
+    asyncio.run(
+        images_router._generate_via_openai_images_endpoint(
+            request=SimpleNamespace(),
+            user=_make_user(),
+            model_id="d7f188cd.gpt-image-2",
+            prompt="生成一张图",
+            n=1,
+            size=None,
+            background=None,
+            source={
+                "base_url": "https://cpa.example.com/v1",
+                "key": "sk-test",
+                "api_config": {"prefix_id": "d7f188cd"},
+            },
+        )
+    )
+
+    assert captured["json_body"]["model"] == "gpt-image-2"
+
+
+def test_generate_via_openai_images_endpoint_strips_internal_prefix_without_config_prefix(monkeypatch):
+    captured = {}
+
+    async def fake_send(**kwargs):
+        captured.update(kwargs)
+        return {
+            "status": 200,
+            "headers": {"content-type": "application/json"},
+            "response_body": json.dumps(
+                {
+                    "data": [
+                        {
+                            "b64_json": base64.b64encode(b"generated" * 32).decode("utf-8")
+                        }
+                    ]
+                }
+            ),
+        }
+
+    monkeypatch.setattr(images_router, "_send_openai_image_request_via_node", fake_send)
+    monkeypatch.setattr(
+        images_router,
+        "upload_image",
+        lambda request, payload, image_data, content_type, user: "/images/generated.png",
+    )
+
+    asyncio.run(
+        images_router._generate_via_openai_images_endpoint(
+            request=SimpleNamespace(),
+            user=_make_user(),
+            model_id="d7f188cd.gpt-image-2",
+            prompt="生成一张图",
+            n=1,
+            size=None,
+            background=None,
+            source={
+                "base_url": "https://cpa.example.com/v1",
+                "key": "sk-test",
+                "api_config": {},
+            },
+        )
+    )
+
+    assert captured["json_body"]["model"] == "gpt-image-2"
+
+
 def test_generate_via_openai_image_edits_endpoint_uses_node_helper(monkeypatch):
     captured = {}
 
@@ -153,7 +292,7 @@ def test_generate_via_openai_image_edits_endpoint_uses_node_helper(monkeypatch):
                 {
                     "data": [
                         {
-                            "b64_json": base64.b64encode(b"edited").decode("utf-8")
+                            "b64_json": base64.b64encode(b"edited" * 32).decode("utf-8")
                         }
                     ]
                 }
@@ -197,3 +336,56 @@ def test_generate_via_openai_image_edits_endpoint_uses_node_helper(monkeypatch):
     assert captured["files"][0]["mime"] == "image/png"
     assert captured["files"][0]["data"] == b"source"
     assert result == [{"url": "/images/edited.png"}]
+
+
+def test_generate_via_openai_image_edits_endpoint_strips_connection_prefix(monkeypatch):
+    captured = {}
+
+    async def fake_send(**kwargs):
+        captured.update(kwargs)
+        return {
+            "status": 200,
+            "headers": {"content-type": "application/json"},
+            "response_body": json.dumps(
+                {
+                    "data": [
+                        {
+                            "b64_json": base64.b64encode(b"edited" * 32).decode("utf-8")
+                        }
+                    ]
+                }
+            ),
+        }
+
+    monkeypatch.setattr(images_router, "_send_openai_image_request_via_node", fake_send)
+    monkeypatch.setattr(
+        images_router,
+        "upload_image",
+        lambda request, payload, image_data, content_type, user: "/images/edited.png",
+    )
+
+    request = SimpleNamespace(
+        base_url="https://example.com/",
+        state=SimpleNamespace(token=None),
+    )
+    image_url = "data:image/png;base64," + base64.b64encode(b"source").decode("utf-8")
+
+    asyncio.run(
+        images_router._generate_via_openai_image_edits_endpoint(
+            request=request,
+            user=_make_user(),
+            model_id="d7f188cd.gpt-image-2",
+            prompt="把猫改成黑白奶牛猫",
+            image_url=image_url,
+            n=1,
+            size=None,
+            background=None,
+            source={
+                "base_url": "https://cpa.example.com/v1",
+                "key": "sk-test",
+                "api_config": {"prefix_id": "d7f188cd"},
+            },
+        )
+    )
+
+    assert captured["form_fields"]["model"] == "gpt-image-2"

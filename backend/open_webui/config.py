@@ -3527,7 +3527,7 @@ IMAGES_GROK_API_KEY = PersistentConfig(
 )
 
 IMAGE_SIZE = PersistentConfig(
-    "IMAGE_SIZE", "image_generation.size", os.getenv("IMAGE_SIZE", "512x512")
+    "IMAGE_SIZE", "image_generation.size", os.getenv("IMAGE_SIZE", "auto")
 )
 
 IMAGE_ASPECT_RATIO = PersistentConfig(

@@ -32,6 +32,7 @@ export type PdfExportMessage = {
 	role: string;
 	content: string;
 	model?: string;
+	modelName?: string;
 	timestamp?: number;
 	completedAt?: number;
 	instruction?: string;
@@ -168,6 +169,7 @@ export const buildPdfExportMessages = (chat: any): PdfExportMessage[] => {
 			role: typeof message?.role === 'string' ? message.role : 'assistant',
 			content,
 			...(typeof message?.model === 'string' && message.model ? { model: message.model } : {}),
+			...(typeof message?.modelName === 'string' && message.modelName ? { modelName: message.modelName } : {}),
 			...(typeof message?.timestamp === 'number' ? { timestamp: message.timestamp } : {}),
 			...(typeof message?.completedAt === 'number' ? { completedAt: message.completedAt } : {}),
 			...(typeof message?.instruction === 'string' && message.instruction

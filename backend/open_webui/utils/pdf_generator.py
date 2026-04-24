@@ -106,7 +106,7 @@ class PDFGenerator:
             pdf.ln(self.MESSAGE_GAP)
 
         role = self._normalize_role(message.get("role"))
-        model = self._safe_text(message.get("model"))
+        model = self._format_model_label(message)
         timestamp = self.format_timestamp(message.get("timestamp")) if message.get("timestamp") else ""
         stats_line = self._build_stats_line(message)
         instruction = self._safe_text(message.get("instruction"))
@@ -615,6 +615,14 @@ class PDFGenerator:
             return info
 
         return {}
+
+    def _format_model_label(self, message: dict[str, Any]) -> str:
+        model_name = self._safe_text(message.get("modelName"))
+        if model_name:
+            return model_name
+
+        model = self._safe_text(message.get("model"))
+        return re.sub(r"^[0-9a-f]{8}\.", "", model, flags=re.IGNORECASE)
 
     def _normalize_role(self, role: Any) -> str:
         raw = self._safe_text(role).lower()

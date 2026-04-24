@@ -18,6 +18,7 @@
 	import { WEBUI_NAME, user } from '$lib/stores';
 	import { copyToClipboard } from '$lib/utils';
 	import { localizeCommonError } from '$lib/utils/common-errors';
+	import { getModelChatDisplayName } from '$lib/utils/model-display';
 	import {
 		GROK_IMAGE_ASPECT_RATIO_OPTIONS,
 		GROK_IMAGE_RESOLUTION_OPTIONS
@@ -45,7 +46,10 @@
 	};
 
 	type WorkspaceImagePrefs = {
+		selectionKey?: string;
 		model?: string;
+		credential_source?: string;
+		connection_index?: number | null;
 		presetSize?: string;
 		customSize?: string;
 		useCustomSize?: boolean;
@@ -86,6 +90,7 @@
 	let imageModels: ImageGenerationModel[] = [];
 	let prompt = '';
 	let selectedModel = '';
+	let selectedModelRawId = '';
 	let selectedPresetSize = WORKSPACE_IMAGE_SIZE_PRESETS[0];
 	let usingCustomSize = false;
 	let customSizeInput = '';
@@ -104,10 +109,26 @@
 	let previewOpen = false;
 	let previewSrc = '';
 	let previewAlt = '';
+	let hadPersistedSelectionKey = false;
 
 	const isAdmin = () => $user?.role === 'admin';
 	const formatError = (error: unknown) =>
 		localizeCommonError(error, (key, options) => $i18n.t(key, options));
+	const getModelOptionValue = (model: ImageGenerationModel | null | undefined) =>
+		`${model?.selection_key ?? model?.id ?? ''}`.trim();
+	const getModelSourceBadge = (model: ImageGenerationModel | null | undefined) => {
+		const source = `${model?.source ?? ''}`.trim().toLowerCase();
+		if (source === 'shared') {
+			return $i18n.t('Shared');
+		}
+		if (source === 'personal') {
+			return $i18n.t('Personal');
+		}
+		return '';
+	};
+	const getModelLabel = (model: ImageGenerationModel | null | undefined) =>
+		getModelChatDisplayName(model as { id?: string; name?: string; connection_name?: string } | null) ||
+		`${model?.name ?? model?.id ?? ''}`.trim();
 
 	const loadWorkspacePrefs = () => {
 		try {
@@ -115,7 +136,9 @@
 			if (!raw) return;
 
 			const prefs = JSON.parse(raw) as WorkspaceImagePrefs;
-			selectedModel = `${prefs?.model ?? ''}`.trim();
+			selectedModel = `${prefs?.selectionKey ?? prefs?.model ?? ''}`.trim();
+			selectedModelRawId = `${prefs?.model ?? ''}`.trim();
+			hadPersistedSelectionKey = Boolean(`${prefs?.selectionKey ?? ''}`.trim());
 			selectedPresetSize = curatedSizeOptions.some(
 				(option) => option.value === `${prefs?.presetSize ?? ''}`.trim()
 			)
@@ -139,8 +162,10 @@
 	};
 
 	$: modelOptions = imageModels.map((model) => ({
-		value: model.id,
-		label: model.name ?? model.id
+		value: getModelOptionValue(model),
+		label: getModelLabel(model),
+		description: model.id,
+		badge: getModelSourceBadge(model)
 	}));
 	$: nativeAspectRatioOptions = GROK_IMAGE_ASPECT_RATIO_OPTIONS.map((option) => ({
 		value: option.value,
@@ -162,7 +187,8 @@
 
 	$: selectedModelLabel =
 		modelOptions.find((option) => option.value === selectedModel)?.label ?? selectedModel;
-	$: selectedModelMeta = imageModels.find((model) => model.id === selectedModel) ?? null;
+	$: selectedModelMeta =
+		imageModels.find((model) => getModelOptionValue(model) === selectedModel) ?? null;
 	$: usesNativeAspectRatioControls = Boolean(
 		selectedModelMeta &&
 			(selectedModelMeta?.size_mode === 'aspect_ratio' || selectedModelMeta?.supports_resolution)
@@ -180,6 +206,9 @@
 		minPixels: currentConstraint?.minPixels,
 		limit: 3
 	});
+	$: if (selectedModelMeta?.id) {
+		selectedModelRawId = selectedModelMeta.id;
+	}
 
 	$: sizeValidation = (() => {
 		if (usesNativeAspectRatioControls) {
@@ -245,7 +274,10 @@
 
 	$: currentPrefsSnapshot = preferencesReady
 		? JSON.stringify({
-				model: selectedModel,
+				selectionKey: selectedModel,
+				model: selectedModelMeta?.id ?? selectedModelRawId ?? '',
+				credential_source: selectedModelMeta?.source ?? '',
+				connection_index: selectedModelMeta?.connection_index ?? null,
 				presetSize: selectedPresetSize,
 				customSize: customSizeInput,
 				useCustomSize: usingCustomSize,
@@ -282,18 +314,48 @@
 	};
 
 	const syncSelectedModelWithAvailableModels = (models: ImageGenerationModel[]) => {
-		const availableIds = new Set(
-			(models ?? []).map((model) => `${model?.id ?? ''}`.trim()).filter(Boolean)
+		const normalizedModels = models ?? [];
+		const availableValues = new Set(
+			normalizedModels.map((model) => getModelOptionValue(model)).filter(Boolean)
 		);
 
-		if (selectedModel && availableIds.has(selectedModel)) {
+		if (selectedModel && availableValues.has(selectedModel)) {
 			return;
 		}
 
-		selectedModel = models?.[0]?.id ?? '';
+		const preferredModelId = `${selectedModelRawId ?? ''}`.trim();
+		const nextModel =
+			(preferredModelId
+				? normalizedModels.find(
+						(model) => model.id === preferredModelId && `${model.source ?? ''}`.trim() === 'shared'
+					) ??
+					normalizedModels.find((model) => model.id === preferredModelId)
+				: null) ?? normalizedModels[0] ?? null;
+
+		if (!nextModel) {
+			selectedModel = '';
+			return;
+		}
+
+		const nextValue = getModelOptionValue(nextModel);
+		const sourceChanged =
+			hadPersistedSelectionKey &&
+			Boolean(selectedModel) &&
+			selectedModel !== nextValue &&
+			Boolean(preferredModelId) &&
+			nextModel.id === preferredModelId;
+
+		selectedModel = nextValue;
+		selectedModelRawId = nextModel.id;
+
+		if (sourceChanged) {
+			toast.info($i18n.t('Your previous image model source is unavailable. Switched to another available source for the same model.'));
+			hadPersistedSelectionKey = false;
+		}
 	};
 
 	const loadWorkspaceModels = async () => {
+		loadError = null;
 		const nextModels = await getImageGenerationModels(localStorage.token, {
 			context: 'runtime',
 			credentialSource: 'auto'
@@ -428,12 +490,16 @@
 		try {
 			const response = await imageGenerations(localStorage.token, {
 				prompt: trimmedPrompt,
-				model: selectedModel || undefined,
+				model: selectedModelMeta?.id || selectedModelRawId || undefined,
 				size: usesNativeAspectRatioControls ? undefined : activeSize || undefined,
 				aspect_ratio: usesNativeAspectRatioControls ? selectedAspectRatioOption : undefined,
 				resolution: showsResolutionControl ? selectedResolution : undefined,
 				steps: showsStepsControl && steps > 0 ? steps : undefined,
-				credential_source: 'auto'
+				credential_source:
+					selectedModelMeta?.source === 'personal' || selectedModelMeta?.source === 'shared'
+						? selectedModelMeta.source
+						: undefined,
+				connection_index: selectedModelMeta?.connection_index ?? undefined
 			});
 
 			if (response?.length) {
@@ -501,6 +567,7 @@
 			const defaultModel = `${usageConfig?.defaults?.model ?? ''}`.trim();
 			if (defaultModel) {
 				selectedModel = defaultModel;
+				selectedModelRawId = defaultModel;
 			}
 
 			const defaultSize = `${usageConfig?.defaults?.size ?? ''}`.trim();
@@ -605,6 +672,11 @@
 									'This image workbench remembers your last model and generation settings only in this browser.'
 								)}
 							</div>
+							<div class="opacity-80">
+								{$i18n.t(
+									'Shows all currently available image models for this engine. The suffix in the name indicates the source channel.'
+								)}
+							</div>
 						</div>
 					</div>
 
@@ -616,7 +688,7 @@
 							searchEnabled={true}
 							searchPlaceholder={$i18n.t('Search a model')}
 							noResultsText={$i18n.t('No results found')}
-							className="w-full lg:w-56 text-xs"
+							className="w-full lg:w-72 text-xs"
 						/>
 
 						<div class="workspace-toolbar-actions">
