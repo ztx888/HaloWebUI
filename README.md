@@ -72,6 +72,62 @@ docker compose up -d
 
 启动完成后访问 **http://localhost:3000** ，首次注册的用户自动成为管理员。
 
+### 首屏加载优化
+
+如果后端服务器带宽较低，首屏加载可能会变慢。推荐把浏览器访问入口放在 Nginx 或 CDN 后面，让前端静态资源就近缓存，接口和实时聊天仍然转发到后端服务。
+
+- 保持用户访问地址不变，不需要单独配置前端后端地址。
+- `/api`、`/ws`、`/openai`、`/ollama`、`/gemini`、`/anthropic`、`/grok` 等路径继续反向代理到后端。
+- `/_app/immutable/` 是带版本指纹的前端构建文件，可以设置一年长缓存。
+- `/assets/`、`/wasm/`、`/static/` 可以设置较短缓存，例如一天；`/cache/`、上传文件、接口响应不建议套用长缓存。
+- 如果要把前端和后端放到不同域名，需要单独处理跨域、登录态、WebSocket、上传下载等链路，不建议只改一个后端 API 地址。
+
+Nginx 示例：
+
+```nginx
+location /_app/immutable/ {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    expires 1y;
+    add_header Cache-Control "public, max-age=31536000, immutable" always;
+}
+
+location /static/ {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    expires 1d;
+    add_header Cache-Control "public, max-age=86400" always;
+}
+
+location ~ ^/(assets|wasm)/ {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    expires 1d;
+    add_header Cache-Control "public, max-age=86400" always;
+}
+
+location /ws {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+}
+
+location / {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
 ### MCP stdio 说明
 
 - 官方 `main` 镜像是默认推荐版，内置了 `uv/uvx`、`node/npx` 与 `git`，可直接体验当前内置的常见 stdio MCP 预设，也兼容一部分通过 `uvx --from git+...` 安装的 MCP。

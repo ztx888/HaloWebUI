@@ -525,6 +525,18 @@ log.setLevel(SRC_LOG_LEVELS["MAIN"])
 
 class SPAStaticFiles(StaticFiles):
     async def get_response(self, path: str, scope):
+        response = await self._get_response(path, scope)
+
+        if path.startswith("_app/immutable/"):
+            response.headers.setdefault(
+                "Cache-Control", "public, max-age=31536000, immutable"
+            )
+        elif path.startswith(("assets/", "wasm/")):
+            response.headers.setdefault("Cache-Control", "public, max-age=86400")
+
+        return response
+
+    async def _get_response(self, path: str, scope):
         try:
             return await super().get_response(path, scope)
         except (HTTPException, StarletteHTTPException) as ex:
@@ -536,6 +548,17 @@ class SPAStaticFiles(StaticFiles):
                     return await super().get_response("index.html", scope)
             else:
                 raise ex
+
+
+class StaticFilesWithCache(StaticFiles):
+    async def get_response(self, path: str, scope):
+        try:
+            response = await super().get_response(path, scope)
+        except (HTTPException, StarletteHTTPException):
+            raise
+
+        response.headers.setdefault("Cache-Control", "public, max-age=86400")
+        return response
 
 
 print(
@@ -2155,7 +2178,7 @@ async def healthcheck_with_db():
     return {"status": True}
 
 
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.mount("/static", StaticFilesWithCache(directory=STATIC_DIR), name="static")
 app.mount("/cache", StaticFiles(directory=CACHE_DIR), name="cache")
 
 
