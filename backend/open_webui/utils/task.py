@@ -75,17 +75,36 @@ def _get_model_base_name(model: Optional[dict[str, Any]]) -> str:
 
 
 def is_dedicated_image_generation_model(model: Optional[dict[str, Any]]) -> bool:
-    base_name = _get_model_base_name(model)
-    if not base_name:
+    if not isinstance(model, dict):
         return False
 
-    if "vision" in base_name and "image" not in base_name:
-        return False
+    candidate_names: list[str] = []
+    info = model.get("info")
+    if isinstance(info, dict):
+        candidate_names.append(str(info.get("base_model_id") or "").strip())
 
-    if any(pattern.search(base_name) for pattern in IMAGE_ONLY_REGEXES):
-        return True
+    for key in ("original_id", "id", "name"):
+        candidate_names.append(str(model.get(key) or "").strip())
 
-    return any(hint in base_name for hint in DEDICATED_IMAGE_MODEL_HINTS)
+    for identity in candidate_names:
+        if not identity:
+            continue
+        if "/" in identity:
+            identity = identity.rsplit("/", 1)[-1]
+        base_name = identity.strip().lower()
+
+        if "vision" in base_name and "image" not in base_name:
+            continue
+
+        if any(pattern.search(base_name) for pattern in IMAGE_ONLY_REGEXES):
+            return True
+
+        if any(hint in base_name for hint in DEDICATED_IMAGE_MODEL_HINTS):
+            return True
+
+    return False
+
+
 def get_task_model_id(
     default_model_id: str, task_model: str, task_model_external: str, models
 ) -> str:

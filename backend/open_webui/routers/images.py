@@ -2994,6 +2994,41 @@ def _looks_like_response_format_rejection_body(body: Any) -> bool:
     )
 
 
+def _parse_openai_image_stream_response(stream_text: str) -> dict[str, Any]:
+    images: list[dict[str, Any]] = []
+    usage: Optional[dict[str, Any]] = None
+
+    for raw_line in stream_text.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("data:"):
+            continue
+
+        data = line[len("data:") :].strip()
+        if not data or data == "[DONE]":
+            continue
+
+        try:
+            event = json.loads(data)
+        except Exception:
+            continue
+
+        if not isinstance(event, dict):
+            continue
+
+        event_type = str(event.get("type") or "")
+        if event_type in {"image_generation.completed", "image_edit.completed"}:
+            b64_json = event.get("b64_json")
+            if b64_json:
+                images.append({"b64_json": b64_json})
+            if isinstance(event.get("usage"), dict):
+                usage = event["usage"]
+
+    body: dict[str, Any] = {"data": images}
+    if usage is not None:
+        body["usage"] = usage
+    return body
+
+
 async def _send_openai_image_request(
     *,
     url: str,
@@ -3045,17 +3080,42 @@ async def _send_openai_image_request(
             verify=REQUESTS_VERIFY,
             follow_redirects=True,
         ) as client:
-            response = await client.post(
-                url,
-                headers=request_headers,
-                json=request_json,
-                data=request_data,
-                files=request_files,
+            expects_stream = bool(
+                (request_json or {}).get("stream")
+                or str((request_data or {}).get("stream") or "").lower() == "true"
             )
+            if expects_stream:
+                async with client.stream(
+                    "POST",
+                    url,
+                    headers=request_headers,
+                    json=request_json,
+                    data=request_data,
+                    files=request_files,
+                ) as response:
+                    response_text = "\n".join([line async for line in response.aiter_lines()])
+            else:
+                response = await client.post(
+                    url,
+                    headers=request_headers,
+                    json=request_json,
+                    data=request_data,
+                    files=request_files,
+                )
+                response_text = response.text
+
+            if expects_stream and response.status_code < 400:
+                response_body = json.dumps(
+                    _parse_openai_image_stream_response(response_text),
+                    ensure_ascii=False,
+                )
+            else:
+                response_body = response_text
+
             return {
                 "status": response.status_code,
                 "headers": dict(response.headers),
-                "response_body": response.text,
+                "response_body": response_body,
                 "elapsed_ms": int((time.monotonic() - started_at) * 1000),
             }
     except Exception as error:
@@ -3358,6 +3418,9 @@ async def _generate_via_openai_images_endpoint(
         "prompt": prompt,
         "n": n,
     }
+    if is_official_openai_image_family and base_name.startswith("gpt-image"):
+        payload["stream"] = True
+        payload["partial_images"] = 1
     if size:
         payload["size"] = size
     if not is_official_openai_image_family:

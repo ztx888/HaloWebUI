@@ -62,6 +62,52 @@ def test_send_openai_image_request_uses_httpx_json(monkeypatch):
     assert captured["post_kwargs"]["files"] is None
 
 
+def test_send_openai_image_request_parses_official_stream(monkeypatch):
+    b64_image = base64.b64encode(b"generated" * 32).decode("utf-8")
+
+    class FakeStreamResponse:
+        status_code = 200
+        headers = {"content-type": "text/event-stream"}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def aiter_lines(self):
+            yield 'data: {"type":"image_generation.partial_image","partial_image_b64":"ignored"}'
+            yield f'data: {json.dumps({"type": "image_generation.completed", "b64_json": b64_image})}'
+            yield "data: [DONE]"
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        def stream(self, method, url, **kwargs):
+            return FakeStreamResponse()
+
+    monkeypatch.setattr(images_router.httpx, "AsyncClient", FakeAsyncClient)
+
+    result = asyncio.run(
+        images_router._send_openai_image_request(
+            url="https://api.openai.com/v1/images/generations",
+            headers={"Authorization": "Bearer test"},
+            request_kind="json",
+            json_body={"model": "gpt-image-2", "prompt": "cat", "stream": True},
+        )
+    )
+
+    assert result["status"] == 200
+    assert json.loads(result["response_body"])["data"] == [{"b64_json": b64_image}]
+
+
 def test_send_openai_image_request_uses_httpx_multipart(monkeypatch):
     captured = {}
 
@@ -168,6 +214,8 @@ def test_generate_via_openai_images_endpoint_uses_native_request(monkeypatch):
 
     assert captured["request_kind"] == "json"
     assert captured["json_body"]["model"] == "gpt-image-2"
+    assert captured["json_body"]["stream"] is True
+    assert captured["json_body"]["partial_images"] == 1
     assert "size" not in captured["json_body"]
     assert result == [{"url": "/images/generated.png"}]
 
@@ -263,6 +311,8 @@ def test_generate_via_openai_images_endpoint_strips_connection_prefix(monkeypatc
     )
 
     assert captured["json_body"]["model"] == "gpt-image-2"
+    assert "stream" not in captured["json_body"]
+    assert "partial_images" not in captured["json_body"]
 
 
 def test_generate_via_openai_images_endpoint_strips_internal_prefix_without_config_prefix(monkeypatch):
