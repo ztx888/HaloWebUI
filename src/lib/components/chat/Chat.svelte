@@ -4447,6 +4447,9 @@
 		if (status === 429) {
 			return 'rate_limited';
 		}
+		if (status === 524) {
+			return 'cloudflare_timeout';
+		}
 		if (status === 408 || status === 504) {
 			return 'timeout';
 		}
@@ -4512,6 +4515,9 @@
 		if (family === 'rate_limited') {
 			return ['api_rate_limit', 'api_quota_exceeded'];
 		}
+		if (family === 'cloudflare_timeout') {
+			return ['api_cloudflare_origin_timeout', 'api_request_timeout', 'proxy_error'];
+		}
 		if (family === 'timeout') {
 			return ['api_request_timeout'];
 		}
@@ -4528,7 +4534,7 @@
 		if (family === 'auth_error') {
 			return 'check_api_key';
 		}
-		if (family === 'rate_limited' || family === 'timeout') {
+		if (family === 'rate_limited' || family === 'timeout' || family === 'cloudflare_timeout') {
 			return 'wait_retry';
 		}
 		if (family === 'upstream_service_error' && status !== null && status >= 500) {
@@ -4560,6 +4566,10 @@
 				return status
 					? $i18n.t('error.title.timeout', { status: statusValue })
 					: $i18n.t('error.title.timeout_no_status');
+			case 'cloudflare_timeout':
+				return status
+					? $i18n.t('error.title.cloudflare_timeout', { status: statusValue })
+					: $i18n.t('error.title.cloudflare_timeout_no_status');
 			default:
 				return status
 					? $i18n.t('error.title.upstream_service_error', { status: statusValue })

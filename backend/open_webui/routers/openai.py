@@ -1774,6 +1774,10 @@ async def get_all_models_responses(request: Request, user: UserModel) -> list:
                 model["connection_name"] = connection_name
             if connection_icon:
                 model["connection_icon"] = connection_icon
+            model["source"] = "personal"
+            model["connection_index"] = idx
+            if prefix_id:
+                model["connection_id"] = prefix_id
             model["name"] = display_name
             model_support = resolve_effective_native_web_search_support(
                 connection_support,

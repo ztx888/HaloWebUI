@@ -177,7 +177,11 @@
 					{#each message.files as file}
 						<div class={($settings?.chatBubble ?? true) ? 'self-end' : ''}>
 							{#if file.type === 'image'}
-								<Image src={file.url} imageClassName=" max-h-96 rounded-lg" />
+								<Image
+									src={file.url}
+									className="w-fit max-w-full outline-hidden focus:outline-hidden"
+									imageClassName="rounded-lg chat-user-attachment-image"
+								/>
 							{:else}
 								<FileItem
 									item={file}

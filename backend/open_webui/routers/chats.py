@@ -792,8 +792,8 @@ async def get_chat_by_id(id: str, user=Depends(get_verified_user)):
 
 @router.get("/{id}/context", response_model=ChatContextResponse)
 async def get_chat_context_by_id(id: str, user=Depends(get_verified_user)):
-    chat = Chats.get_chat_by_id_and_user_id(id, user.id)
-    if not chat:
+    chat_meta = Chats.get_chat_meta_by_id_and_user_id(id, user.id)
+    if chat_meta is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail=ERROR_MESSAGES.NOT_FOUND
         )
@@ -802,7 +802,7 @@ async def get_chat_context_by_id(id: str, user=Depends(get_verified_user)):
     task_ids: list[str] = []
 
     try:
-        tag_ids = chat.meta.get("tags", [])
+        tag_ids = chat_meta.get("tags", [])
         tag_models = Tags.get_tags_by_ids_and_user_id(tag_ids, user.id)
     except Exception:
         log.exception("Failed to load chat tags for chat_id=%s", id)

@@ -2926,6 +2926,7 @@ async def chat_image_generation_handler(
                         key: image_generation_options.get(key)
                         for key in (
                             "model",
+                            "model_ref",
                             "size",
                             "image_size",
                             "aspect_ratio",
@@ -3268,10 +3269,44 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                 image_generation_options = {}
 
             selected_image_model = str(
-                form_data.get("model") or model.get("id") or ""
+                model.get("original_id")
+                or model.get("id")
+                or form_data.get("model")
+                or ""
             ).strip()
+            model_ref = {}
+            if isinstance(model, dict):
+                connection_index = model.get("connection_index")
+                api_config = model.get("api_config") if isinstance(model.get("api_config"), dict) else {}
+                connection_id = str(
+                    model.get("connection_id")
+                    or model.get("prefix_id")
+                    or (api_config or {}).get("prefix_id")
+                    or ""
+                ).strip()
+                provider = str(model.get("provider") or model.get("owned_by") or "").strip()
+                source = str(model.get("source") or model.get("effective_source") or "personal").strip()
+
+                if provider:
+                    model_ref["provider"] = provider
+                if source:
+                    model_ref["source"] = source
+                if connection_index is not None:
+                    model_ref["connection_index"] = connection_index
+                if connection_id:
+                    model_ref["connection_id"] = connection_id
+
+            legacy_prefix_match = re.match(
+                r"^([0-9a-f]{8})\.(.+)$", selected_image_model, re.IGNORECASE
+            )
+            if legacy_prefix_match:
+                model_ref.setdefault("connection_id", legacy_prefix_match.group(1))
+                selected_image_model = legacy_prefix_match.group(2).strip()
+
             if selected_image_model:
                 image_generation_options["model"] = selected_image_model
+            if model_ref:
+                image_generation_options["model_ref"] = model_ref
 
             features["image_generation"] = True
             if image_generation_options:

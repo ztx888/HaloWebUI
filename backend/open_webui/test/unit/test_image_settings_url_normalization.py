@@ -760,3 +760,271 @@ def test_xai_generation_payload_only_uses_supported_fields(monkeypatch):
             "resolution": "2k",
         }
     ]
+
+
+def test_image_generation_uses_selection_key_to_pick_duplicate_openai_connection(monkeypatch):
+    same_base_url = "https://relay.example.com/v1"
+    cfg = SimpleNamespace(
+        ENABLE_IMAGE_GENERATION=True,
+        IMAGE_GENERATION_ENGINE="openai",
+        IMAGE_GENERATION_MODEL="",
+        IMAGE_SIZE="auto",
+        IMAGE_ASPECT_RATIO="1:1",
+        IMAGE_RESOLUTION="1k",
+        ENABLE_IMAGE_GENERATION_SHARED_KEY=False,
+        IMAGES_OPENAI_API_BASE_URL="",
+        IMAGES_OPENAI_API_KEY="",
+        IMAGES_OPENAI_API_FORCE_MODE=False,
+        IMAGE_MODEL_FILTER_REGEX="",
+    )
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(config=cfg)))
+    user = SimpleNamespace(id="user-1", role="admin")
+
+    monkeypatch.setattr(
+        images_router.openai_router,
+        "_get_openai_user_config",
+        lambda _user: (
+            [same_base_url, same_base_url],
+            ["key-a", "key-b"],
+            {
+                "0": {"remark": "A"},
+                "1": {"remark": "B"},
+            },
+        ),
+    )
+
+    async def fake_discover(_request, _user, engine, source):
+        assert engine == "openai"
+        return [
+            images_router._build_image_model_entry(
+                model_id="gpt-image-2",
+                name="gpt-image-2",
+                generation_mode="openai_images",
+                detection_method="metadata",
+                supports_background=False,
+                supports_batch=True,
+                size_mode="exact",
+                text_output_supported=False,
+                source=source,
+            )
+        ]
+
+    captured = {}
+
+    async def fake_images_endpoint(_request, _user, **kwargs):
+        captured.update(kwargs)
+        return [{"url": "/api/v1/files/generated"}]
+
+    monkeypatch.setattr(images_router, "_discover_image_models_for_source", fake_discover)
+    monkeypatch.setattr(
+        images_router,
+        "_generate_via_openai_images_endpoint",
+        fake_images_endpoint,
+    )
+
+    sources = images_router._list_image_provider_sources(
+        request,
+        user,
+        "openai",
+        context="runtime",
+        credential_source="auto",
+    )
+    selected_model = images_router._build_image_model_selection_key(
+        "gpt-image-2",
+        sources[1],
+    )
+
+    result = asyncio.run(
+        images_router.image_generations(
+            request,
+            images_router.GenerateImageForm(
+                prompt="draw a dog",
+                model=selected_model,
+            ),
+            user=user,
+        )
+    )
+
+    assert result == [{"url": "/api/v1/files/generated"}]
+    assert captured["model_id"] == "gpt-image-2"
+    assert captured["source"]["connection_index"] == 1
+    assert captured["source"]["key"] == "key-b"
+
+
+def test_runtime_image_plain_model_keeps_selecting_only_matching_openai_connection(monkeypatch):
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                config=SimpleNamespace(
+                    IMAGE_GENERATION_ENGINE="openai",
+                    ENABLE_IMAGE_GENERATION_SHARED_KEY=False,
+                    IMAGES_OPENAI_API_BASE_URL="",
+                    IMAGES_OPENAI_API_KEY="",
+                    IMAGES_OPENAI_API_FORCE_MODE=False,
+                )
+            )
+        )
+    )
+    user = SimpleNamespace(id="user-1")
+    same_base_url = "https://relay.example.com/v1"
+
+    monkeypatch.setattr(
+        images_router.openai_router,
+        "_get_openai_user_config",
+        lambda _user: (
+            [same_base_url, same_base_url],
+            ["key-a", "key-b"],
+            {
+                "0": {"remark": "A"},
+                "1": {"remark": "B"},
+            },
+        ),
+    )
+
+    async def fake_discover(_request, _user, engine, source):
+        assert engine == "openai"
+        if source["connection_index"] == 0:
+            return [
+                images_router._build_image_model_entry(
+                    model_id="gpt-image-1",
+                    name="gpt-image-1",
+                    generation_mode="openai_images",
+                    detection_method="metadata",
+                    supports_background=False,
+                    supports_batch=True,
+                    size_mode="exact",
+                    text_output_supported=False,
+                    source=source,
+                )
+            ]
+        return [
+            images_router._build_image_model_entry(
+                model_id="gpt-image-2",
+                name="gpt-image-2",
+                generation_mode="openai_images",
+                detection_method="metadata",
+                supports_background=False,
+                supports_batch=True,
+                size_mode="exact",
+                text_output_supported=False,
+                source=source,
+            )
+        ]
+
+    monkeypatch.setattr(images_router, "_discover_image_models_for_source", fake_discover)
+
+    source, discovered_models = asyncio.run(
+        _select_runtime_image_provider_source(
+            request,
+            user,
+            "openai",
+            selected_model="gpt-image-2",
+        )
+    )
+
+    assert source is not None
+    assert source["connection_index"] == 1
+    assert source["key"] == "key-b"
+    assert discovered_models[0]["id"] == "gpt-image-2"
+
+
+def test_gemini_named_image_model_on_openai_compatible_connection_uses_openai_source(monkeypatch):
+    cfg = SimpleNamespace(
+        ENABLE_IMAGE_GENERATION=True,
+        IMAGE_GENERATION_ENGINE="gemini",
+        IMAGE_GENERATION_MODEL="old-admin-default",
+        IMAGE_SIZE="2048x2048",
+        IMAGE_ASPECT_RATIO="16:9",
+        IMAGE_RESOLUTION="2k",
+        ENABLE_IMAGE_GENERATION_SHARED_KEY=False,
+        IMAGES_OPENAI_API_BASE_URL="",
+        IMAGES_OPENAI_API_KEY="",
+        IMAGES_OPENAI_API_FORCE_MODE=False,
+        IMAGES_GEMINI_API_BASE_URL="",
+        IMAGES_GEMINI_API_KEY="",
+        IMAGES_GEMINI_API_FORCE_MODE=False,
+        IMAGES_GROK_API_BASE_URL="",
+        IMAGES_GROK_API_KEY="",
+        IMAGE_MODEL_FILTER_REGEX="",
+    )
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(config=cfg)))
+    user = SimpleNamespace(id="user-1", role="admin")
+
+    monkeypatch.setattr(
+        images_router.openai_router,
+        "_get_openai_user_config",
+        lambda _user: (
+            ["https://openai-compatible.example.com/v1"],
+            ["openai-compatible-key"],
+            {"0": {"remark": "OpenAI Compatible"}},
+        ),
+    )
+    monkeypatch.setattr(
+        images_router.gemini_router,
+        "_get_gemini_user_config",
+        lambda _user: ([], [], {}),
+    )
+    monkeypatch.setattr(
+        images_router.grok_router,
+        "_get_grok_user_config",
+        lambda _user: ([], [], {}),
+    )
+
+    async def fake_discover(_request, _user, engine, source):
+        if engine != "openai":
+            return []
+        return [
+            images_router._build_image_model_entry(
+                model_id="gemini-3.1-flash-image-preview",
+                name="gemini-3.1-flash-image-preview",
+                generation_mode="openai_images",
+                detection_method="metadata",
+                supports_background=False,
+                supports_batch=True,
+                size_mode="exact",
+                text_output_supported=False,
+                source=source,
+            )
+        ]
+
+    captured = {}
+
+    async def fake_images_endpoint(_request, _user, **kwargs):
+        captured.update(kwargs)
+        return [{"url": "/api/v1/files/generated"}]
+
+    monkeypatch.setattr(images_router, "_discover_image_models_for_source", fake_discover)
+    monkeypatch.setattr(
+        images_router,
+        "_generate_via_openai_images_endpoint",
+        fake_images_endpoint,
+    )
+
+    source = images_router._list_image_provider_sources(
+        request,
+        user,
+        "openai",
+        context="runtime",
+        credential_source="auto",
+    )[0]
+    selected_model = images_router._build_image_model_selection_key(
+        "gemini-3.1-flash-image-preview",
+        source,
+    )
+
+    result = asyncio.run(
+        images_router.image_generations(
+            request,
+            images_router.GenerateImageForm(
+                prompt="draw a cat",
+                model=selected_model,
+            ),
+            user=user,
+        )
+    )
+
+    assert result == [{"url": "/api/v1/files/generated"}]
+    assert captured["model_id"] == "gemini-3.1-flash-image-preview"
+    assert captured["source"]["provider"] == "openai"
+    assert captured["source"]["key"] == "openai-compatible-key"
+    assert captured["size"] is None

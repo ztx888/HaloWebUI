@@ -346,6 +346,8 @@ async def get_models(
         for idx, url in enumerate(base_urls):
             api_key = keys[idx] if idx < len(keys) else ""
             api_config = cfgs.get(str(idx), {}) if isinstance(cfgs, dict) else {}
+            prefix_id = str(api_config.get("prefix_id") or "").strip()
+            connection_name = str(api_config.get("remark") or api_config.get("name") or "").strip()
             if not url or not api_key:
                 continue
 
@@ -362,8 +364,13 @@ async def get_models(
                 models["data"].append(
                     {
                         "id": model_id,
+                        "original_id": model_id,
                         "name": str(model.get("name") or model_id).strip(),
                         "owned_by": "openai",
+                        "source": "personal",
+                        "connection_index": idx,
+                        **({"connection_id": prefix_id} if prefix_id else {}),
+                        **({"connection_name": connection_name} if connection_name else {}),
                     }
                 )
     else:
@@ -373,13 +380,20 @@ async def get_models(
         url = base_urls[url_idx]
         api_key = keys[url_idx] if url_idx < len(keys) else ""
         api_config = cfgs.get(str(url_idx), {}) if isinstance(cfgs, dict) else {}
+        prefix_id = str(api_config.get("prefix_id") or "").strip()
+        connection_name = str(api_config.get("remark") or api_config.get("name") or "").strip()
         payload = await _fetch_grok_models(url, api_key, api_config, user=user)
         models = {
             "data": [
                 {
                     "id": str(model.get("id") or "").strip(),
+                    "original_id": str(model.get("id") or "").strip(),
                     "name": str(model.get("name") or model.get("id") or "").strip(),
                     "owned_by": "openai",
+                    "source": "personal",
+                    "connection_index": url_idx,
+                    **({"connection_id": prefix_id} if prefix_id else {}),
+                    **({"connection_name": connection_name} if connection_name else {}),
                 }
                 for model in payload
                 if str(model.get("id") or "").strip()

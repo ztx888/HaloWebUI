@@ -115,7 +115,7 @@
 	const formatError = (error: unknown) =>
 		localizeCommonError(error, (key, options) => $i18n.t(key, options));
 	const getModelOptionValue = (model: ImageGenerationModel | null | undefined) =>
-		`${model?.selection_key ?? model?.id ?? ''}`.trim();
+		`${model?.selection_key ?? model?.legacy_id ?? model?.id ?? ''}`.trim();
 	const getModelSourceBadge = (model: ImageGenerationModel | null | undefined) => {
 		const source = `${model?.source ?? ''}`.trim().toLowerCase();
 		if (source === 'shared') {
@@ -278,6 +278,7 @@
 				model: selectedModelMeta?.id ?? selectedModelRawId ?? '',
 				credential_source: selectedModelMeta?.source ?? '',
 				connection_index: selectedModelMeta?.connection_index ?? null,
+				model_ref: selectedModelMeta?.model_ref ?? null,
 				presetSize: selectedPresetSize,
 				customSize: customSizeInput,
 				useCustomSize: usingCustomSize,
@@ -327,6 +328,9 @@
 		const nextModel =
 			(preferredModelId
 				? normalizedModels.find(
+						(model) => model.legacy_id === preferredModelId
+					) ??
+					normalizedModels.find(
 						(model) => model.id === preferredModelId && `${model.source ?? ''}`.trim() === 'shared'
 					) ??
 					normalizedModels.find((model) => model.id === preferredModelId)
@@ -357,7 +361,7 @@
 	const loadWorkspaceModels = async () => {
 		loadError = null;
 		const nextModels = await getImageGenerationModels(localStorage.token, {
-			context: 'runtime',
+			context: 'workspace',
 			credentialSource: 'auto'
 		}).catch((error) => {
 			loadError = `${error ?? ''}`;
@@ -491,6 +495,7 @@
 			const response = await imageGenerations(localStorage.token, {
 				prompt: trimmedPrompt,
 				model: selectedModelMeta?.id || selectedModelRawId || undefined,
+				model_ref: selectedModelMeta?.model_ref ?? undefined,
 				size: usesNativeAspectRatioControls ? undefined : activeSize || undefined,
 				aspect_ratio: usesNativeAspectRatioControls ? selectedAspectRatioOption : undefined,
 				resolution: showsResolutionControl ? selectedResolution : undefined,
@@ -563,31 +568,6 @@
 			return;
 		}
 
-		if (!lastPersistedPrefsSnapshot) {
-			const defaultModel = `${usageConfig?.defaults?.model ?? ''}`.trim();
-			if (defaultModel) {
-				selectedModel = defaultModel;
-				selectedModelRawId = defaultModel;
-			}
-
-			const defaultSize = `${usageConfig?.defaults?.size ?? ''}`.trim();
-			if (defaultSize) {
-				const presetMatch = curatedSizeOptions.find((option) => option.value === defaultSize);
-				if (presetMatch) {
-					selectedPresetSize = presetMatch.value as (typeof WORKSPACE_IMAGE_SIZE_PRESETS)[number];
-					usingCustomSize = false;
-					customSizeInput = '';
-				} else {
-					customSizeInput = defaultSize;
-					usingCustomSize = true;
-				}
-			}
-
-			selectedAspectRatioOption = `${usageConfig?.defaults?.aspect_ratio ?? '1:1'}`.trim() || '1:1';
-			selectedResolution = `${usageConfig?.defaults?.resolution ?? '1k'}`.trim().toLowerCase() || '1k';
-			const defaultSteps = Number(usageConfig?.defaults?.steps ?? 0);
-			steps = Number.isFinite(defaultSteps) && defaultSteps >= 0 ? defaultSteps : 0;
-		}
 
 		await loadWorkspaceModels();
 
@@ -674,7 +654,7 @@
 							</div>
 							<div class="opacity-80">
 								{$i18n.t(
-									'Shows all currently available image models for this engine. The suffix in the name indicates the source channel.'
+									'Shows all currently available image models. The suffix in the name indicates the source channel.'
 								)}
 							</div>
 						</div>

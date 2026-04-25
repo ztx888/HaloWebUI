@@ -1225,7 +1225,12 @@ async def get_all_models_responses(request: Request, user: UserModel) -> list:
         for model in model_list:
             model["urlIdx"] = idx
             model_name = model.get("name", "").replace("models/", "")
+            model["original_id"] = model_name
             model["id"] = f"{prefix_id}.{model_name}" if prefix_id else model_name
+            model["source"] = "personal"
+            model["connection_index"] = idx
+            if prefix_id:
+                model["connection_id"] = prefix_id
 
             if connection_name:
                 model["connection_name"] = connection_name

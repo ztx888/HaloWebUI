@@ -470,19 +470,34 @@ textarea::placeholder {
 }
 
 /* 聊天消息中的图片尺寸限制 */
-.chat-message-image {
-	max-width: 480px;
-	max-height: 480px;
-	width: auto;
-	height: auto;
+.chat-message-image,
+.markdown-prose img.chat-message-image {
+	max-width: 440px !important;
+	max-height: 440px !important;
+	width: auto !important;
+	height: auto !important;
+	object-fit: contain;
+}
+
+.markdown-prose img.chat-user-attachment-image {
+	max-width: min(88px, 70vw) !important;
+	max-height: 88px !important;
+	width: auto !important;
+	height: auto !important;
 	object-fit: contain;
 }
 
 /* 移动端响应式 */
 @media (max-width: 768px) {
-	.chat-message-image {
-		max-width: 320px;
-		max-height: 400px;
+	.chat-message-image,
+	.markdown-prose img.chat-message-image {
+		max-width: 340px !important;
+		max-height: 380px !important;
+	}
+
+	.markdown-prose img.chat-user-attachment-image {
+		max-width: min(80px, 70vw) !important;
+		max-height: 80px !important;
 	}
 }
 

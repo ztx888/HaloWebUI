@@ -4,6 +4,7 @@ import { parseJsonResponse } from '../response';
 export type ImageGenerationRequest = {
 	prompt: string;
 	model?: string;
+	model_ref?: Record<string, unknown>;
 	size?: string;
 	image_size?: '512' | '1K' | '2K' | '4K' | string;
 	aspect_ratio?: string;
@@ -18,30 +19,23 @@ export type ImageGenerationRequest = {
 
 export type ImageUsageConfig = {
 	enabled: boolean;
-	engine: 'openai' | 'gemini' | 'grok' | 'comfyui' | 'automatic1111' | string;
-	defaults: {
-		model?: string;
-		size?: string;
-		aspect_ratio?: string;
-		resolution?: string;
-		steps?: number;
-	};
 	shared_key: {
 		enabled: boolean;
 		available: boolean;
+		providers?: Record<string, boolean>;
 	};
 	personal_key: {
 		supported: boolean;
-		provider: 'openai' | 'gemini' | 'grok' | null | string;
+		providers?: string[];
 	};
 };
 
 export type ImageGenerationConfig = {
-	MODEL: string;
-	IMAGE_SIZE: string;
+	MODEL?: string;
+	IMAGE_SIZE?: string;
 	IMAGE_ASPECT_RATIO?: string;
 	IMAGE_RESOLUTION?: string;
-	IMAGE_STEPS: number;
+	IMAGE_STEPS?: number;
 	IMAGE_MODEL_FILTER_REGEX?: string | null;
 };
 
@@ -49,6 +43,8 @@ export type ImageGenerationModel = {
 	id: string;
 	name?: string;
 	selection_key?: string;
+	legacy_id?: string | null;
+	model_ref?: Record<string, unknown> | null;
 	provider?: 'openai' | 'gemini' | 'grok' | string | null;
 	generation_mode?: string;
 	detection_method?: string;

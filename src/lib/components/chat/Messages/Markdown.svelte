@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { createEventDispatcher, onDestroy } from 'svelte';
-	import { marked, type Token } from 'marked';
+	import { Marked, Tokenizer, type Token } from 'marked';
 
 	import { replaceTokens, processResponseContent } from '$lib/utils';
 	import { user } from '$lib/stores';
@@ -72,17 +72,19 @@
 		throwOnError: false
 	};
 
-	marked.use(markedKatexExtension(options));
-	marked.use(markedExtension(options));
-	marked.use(citationExtension(sourceIdsRef));
-	marked.use(noSingleTildeExtension());
+	const markdownParser = new Marked(
+		markedKatexExtension(options),
+		markedExtension(options),
+		citationExtension(sourceIdsRef),
+		noSingleTildeExtension()
+	);
 
 	{
 		const CJK = '\u4e00-\u9fff\u3400-\u4dbf\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af\uf900-\ufaff';
 		const addCJK = (re: RegExp) =>
 			new RegExp(re.source.replaceAll('\\p{P}', '\\p{P}' + CJK), re.flags);
 
-		marked.use({
+		markdownParser.use({
 			tokenizer: {
 				emStrong(this: any, src: string, maskedSrc: string, prevChar: string) {
 					if (!this.rules.inline._cjkPatched) {
@@ -91,7 +93,7 @@
 						this.rules.inline.emStrong.rDelimUnd = addCJK(this.rules.inline.emStrong.rDelimUnd);
 						this.rules.inline._cjkPatched = true;
 					}
-					return marked.Tokenizer.prototype.emStrong.call(this, src, maskedSrc, prevChar);
+					return Tokenizer.prototype.emStrong.call(this, src, maskedSrc, prevChar);
 				}
 			}
 		});
@@ -168,7 +170,7 @@
 
 		if (nextLexedContent !== lastLexedContent) {
 			lastLexedContent = nextLexedContent;
-			tokens = nextLexedContent ? marked.lexer(nextLexedContent) : [];
+			tokens = nextLexedContent ? markdownParser.lexer(nextLexedContent) : [];
 		}
 	}
 

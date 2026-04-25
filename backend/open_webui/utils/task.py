@@ -21,6 +21,8 @@ DEDICATED_IMAGE_MODEL_HINTS = (
     "chatgpt-image",
     "dall-e",
     "dalle",
+    "gemini-2.0-flash-preview-image-generation",
+    "gemini-2.5-flash-image",
     "imagen",
     "grok-imagine",
     "qwen-image",
@@ -44,6 +46,7 @@ DEDICATED_IMAGE_MODEL_HINTS = (
 )
 
 IMAGE_ONLY_REGEXES = (
+    re.compile(r"^gemini-3(?:\.\d+)?-(?:flash|pro)-image(?:[-.\w]+)?$"),
     re.compile(r"^grok(?:[-.\w]+)?-image(?:[-.\w]+)?$"),
     re.compile(r"^sd[-.\w]+$"),
 )

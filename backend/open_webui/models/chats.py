@@ -744,6 +744,18 @@ class ChatTable:
         except Exception:
             return None
 
+    def get_chat_meta_by_id_and_user_id(self, id: str, user_id: str) -> Optional[dict]:
+        try:
+            with get_db() as db:
+                row = (
+                    db.query(Chat.meta)
+                    .filter_by(id=id, user_id=user_id)
+                    .first()
+                )
+                return row[0] if row else None
+        except Exception:
+            return None
+
     def get_chats(self, skip: int = 0, limit: int = 50) -> list[ChatModel]:
         with get_db() as db:
             all_chats = (
