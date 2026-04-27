@@ -76,6 +76,8 @@
 	export let direct = false;
 
 	export let connection: Connection | null = null;
+	const SETTINGS_CONFLICT_DETAIL =
+		'User settings were updated elsewhere. Please retry with the latest settings.';
 
 	let url = '';
 	let key = '';
@@ -1167,7 +1169,7 @@
 			try {
 				await onSubmit(connection);
 			} catch (error) {
-				const message =
+				const rawMessage =
 					error instanceof Error
 						? error.message
 						: typeof error === 'string'
@@ -1179,6 +1181,11 @@
 										return `${error}`;
 									}
 								})();
+				const message = rawMessage.includes(SETTINGS_CONFLICT_DETAIL)
+					? $i18n.t(
+							'Settings changed in another tab. The latest settings have been reloaded; please review and save again.'
+						)
+					: rawMessage;
 				toast.error(`${$i18n.t('Failed to save connections')}${message ? `: ${message}` : ''}`);
 				return;
 			}

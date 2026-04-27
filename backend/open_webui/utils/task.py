@@ -7,6 +7,7 @@ import uuid
 
 
 from open_webui.utils.misc import get_last_user_message, get_messages_content
+from open_webui.utils.model_identity import get_model_selection_id, resolve_model_from_lookup
 
 from open_webui.env import SRC_LOG_LEVELS
 from open_webui.config import DEFAULT_RAG_TEMPLATE
@@ -109,13 +110,28 @@ def is_dedicated_image_generation_model(model: Optional[dict[str, Any]]) -> bool
 
 
 def get_task_model_id(
-    default_model_id: str, task_model: str, task_model_external: str, models
+    default_model_id: str,
+    task_model: str,
+    task_model_external: str,
+    models,
+    ambiguous_model_aliases=None,
 ) -> str:
     # Set the task model
     task_model_id = default_model_id
     # Check if the user has a custom task model and use that model
-    if task_model_external and task_model_external in models:
-        task_model_id = task_model_external
+    if task_model_external:
+        external_task_model = resolve_model_from_lookup(
+            models,
+            ambiguous_model_aliases or set(),
+            task_model_external,
+        )
+    else:
+        external_task_model = None
+
+    if isinstance(external_task_model, dict):
+        task_model_id = (
+            get_model_selection_id(external_task_model)
+        ) or task_model_external
 
     return task_model_id
 

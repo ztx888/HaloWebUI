@@ -77,6 +77,21 @@
 	const getConnectionRenderKey = (url: string, key: string | undefined, config: any) =>
 		config ?? `${url}::${key ?? ''}`;
 	const getOllamaRenderKey = (url: string, config: any) => config ?? url;
+	const SETTINGS_CONFLICT_DETAIL =
+		'User settings were updated elsewhere. Please retry with the latest settings.';
+	const formatSettingsSaveError = (error: unknown) => {
+		const message =
+			error instanceof Error
+				? error.message
+				: typeof error === 'string'
+					? error
+					: `${(error as any)?.detail ?? error ?? ''}`;
+		return message.includes(SETTINGS_CONFLICT_DETAIL)
+			? $i18n.t(
+					'Settings changed in another tab. The latest settings have been reloaded; please review and save again.'
+				)
+			: message;
+	};
 
 	const initExpandedSections = () => {
 		if (expandedSectionsInitialized) return;
@@ -178,7 +193,7 @@
 			OPENAI_API_KEYS: OPENAI_API_KEYS,
 			OPENAI_API_CONFIGS: OPENAI_API_CONFIGS
 		}).catch((error) => {
-			toast.error(`${error}`);
+			toast.error(formatSettingsSaveError(error));
 			return null;
 		});
 
@@ -227,7 +242,7 @@
 			OLLAMA_BASE_URLS: OLLAMA_BASE_URLS,
 			OLLAMA_API_CONFIGS: OLLAMA_API_CONFIGS
 		}).catch((error) => {
-			toast.error(`${error}`);
+			toast.error(formatSettingsSaveError(error));
 			return null;
 		});
 
@@ -263,7 +278,7 @@
 
 	const updateConnectionsHandler = async () => {
 		const res = await setConnectionsConfig(localStorage.token, connectionsConfig).catch((error) => {
-			toast.error(`${error}`);
+			toast.error(formatSettingsSaveError(error));
 		});
 
 		if (res) {
@@ -344,7 +359,7 @@
 			GEMINI_API_KEYS: GEMINI_API_KEYS,
 			GEMINI_API_CONFIGS: GEMINI_API_CONFIGS
 		}).catch((error) => {
-			toast.error(`${error}`);
+			toast.error(formatSettingsSaveError(error));
 			return null;
 		});
 
@@ -416,7 +431,7 @@
 			GROK_API_KEYS: GROK_API_KEYS,
 			GROK_API_CONFIGS: GROK_API_CONFIGS
 		}).catch((error) => {
-			toast.error(`${error}`);
+			toast.error(formatSettingsSaveError(error));
 			return null;
 		});
 
@@ -487,7 +502,7 @@
 			ANTHROPIC_API_KEYS: ANTHROPIC_API_KEYS,
 			ANTHROPIC_API_CONFIGS: ANTHROPIC_API_CONFIGS
 		}).catch((error) => {
-			toast.error(`${error}`);
+			toast.error(formatSettingsSaveError(error));
 			return null;
 		});
 

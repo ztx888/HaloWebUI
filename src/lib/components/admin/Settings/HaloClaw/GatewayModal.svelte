@@ -4,6 +4,7 @@
 	import Modal from '$lib/components/common/Modal.svelte';
 	import HaloSelect from '$lib/components/common/HaloSelect.svelte';
 	import { getModelChatDisplayName } from '$lib/utils/model-display';
+	import { getModelSelectionId, resolveModelSelectionId } from '$lib/utils/model-identity';
 
 	const i18n: Writable<any> = getContext('i18n');
 	const dispatch = createEventDispatcher();
@@ -54,10 +55,13 @@
 			? `${window.location.origin}/api/v1/haloclaw/webhook/${platform}/${gateway.id}`
 			: '';
 
+	const resolveModelId = (id: string) =>
+		resolveModelSelectionId(models ?? [], id, { preserveAmbiguous: true }) || id;
+
 	const resetForm = (gw: any) => {
 		platform = gw?.platform ?? 'telegram';
 		name = gw?.name ?? '';
-		defaultModelId = gw?.default_model_id ?? '';
+		defaultModelId = resolveModelId(gw?.default_model_id ?? '');
 		systemPrompt = gw?.system_prompt ?? '';
 		dmPolicy = gw?.access_policy?.dm_policy ?? 'open';
 		allowlist = gw?.access_policy?.allowlist?.join(', ') ?? '';
@@ -121,7 +125,7 @@
 			platform,
 			name,
 			config: buildConfig(),
-			default_model_id: defaultModelId || null,
+			default_model_id: resolveModelId(defaultModelId) || null,
 			system_prompt: systemPrompt || null,
 			access_policy: {
 				dm_policy: dmPolicy,
@@ -379,7 +383,7 @@
 							options={[
 								{ value: '', label: $i18n.t('Use global default') },
 								...(models ?? []).map((m) => ({
-									value: m.id,
+									value: getModelSelectionId(m),
 									label: getModelChatDisplayName(m) || m.name || m.id
 								}))
 							]}

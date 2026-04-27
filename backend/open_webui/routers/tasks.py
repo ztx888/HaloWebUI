@@ -25,6 +25,7 @@ from open_webui.utils.filter import (
     process_filter_functions,
 )
 from open_webui.utils.task import get_task_model_id
+from open_webui.utils.model_identity import get_model_selection_id, resolve_model_from_lookup
 
 from open_webui.config import (
     DEFAULT_TITLE_GENERATION_PROMPT_TEMPLATE,
@@ -73,6 +74,39 @@ def _serialize_task_config(request: Request) -> dict:
         field: getattr(request.app.state.config, field)
         for field in TASK_CONFIG_FIELDS
     }
+
+
+async def _get_request_models(request: Request, user) -> dict:
+    if getattr(request.state, "direct", False) and hasattr(request.state, "model"):
+        model = request.state.model
+        return {
+            get_model_selection_id(model) or model["id"]: model,
+            model["id"]: model,
+        }
+
+    models = getattr(request.state, "MODELS", None) or {}
+    if not models:
+        await get_all_models(request, user=user)
+        models = getattr(request.state, "MODELS", None) or {}
+    return models
+
+
+def _resolve_task_model_id(request: Request, models: dict, model_id: str) -> str:
+    model = resolve_model_from_lookup(
+        models,
+        getattr(request.state, "MODELS_AMBIGUOUS", set()) or set(),
+        model_id,
+    )
+    if not model:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Model not found",
+        )
+    return get_model_selection_id(model) or model_id
+
+
+def _get_ambiguous_model_aliases(request: Request) -> set:
+    return getattr(request.state, "MODELS_AMBIGUOUS", set()) or set()
 
 
 ##################################
@@ -130,28 +164,15 @@ async def generate_title(
             content={"detail": "Title generation is disabled"},
         )
 
-    if getattr(request.state, "direct", False) and hasattr(request.state, "model"):
-        models = {
-            request.state.model["id"]: request.state.model,
-        }
-    else:
-        models = getattr(request.state, "MODELS", None) or {}
-        if not models:
-            await get_all_models(request, user=user)
-            models = getattr(request.state, "MODELS", None) or {}
-
-    model_id = form_data["model"]
-    if model_id not in models:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Model not found",
-        )
+    models = await _get_request_models(request, user)
+    model_id = _resolve_task_model_id(request, models, form_data["model"])
 
     task_model_id = get_task_model_id(
         model_id,
         request.app.state.config.TASK_MODEL,
         request.app.state.config.TASK_MODEL_EXTERNAL,
         models,
+        _get_ambiguous_model_aliases(request),
     )
 
     log.debug(
@@ -223,28 +244,15 @@ async def generate_chat_tags(
             content={"detail": "Tags generation is disabled"},
         )
 
-    if getattr(request.state, "direct", False) and hasattr(request.state, "model"):
-        models = {
-            request.state.model["id"]: request.state.model,
-        }
-    else:
-        models = getattr(request.state, "MODELS", None) or {}
-        if not models:
-            await get_all_models(request, user=user)
-            models = getattr(request.state, "MODELS", None) or {}
-
-    model_id = form_data["model"]
-    if model_id not in models:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Model not found",
-        )
+    models = await _get_request_models(request, user)
+    model_id = _resolve_task_model_id(request, models, form_data["model"])
 
     task_model_id = get_task_model_id(
         model_id,
         request.app.state.config.TASK_MODEL,
         request.app.state.config.TASK_MODEL_EXTERNAL,
         models,
+        _get_ambiguous_model_aliases(request),
     )
 
     log.debug(
@@ -286,28 +294,15 @@ async def generate_chat_tags(
 async def generate_image_prompt(
     request: Request, form_data: dict, user=Depends(get_verified_user)
 ):
-    if getattr(request.state, "direct", False) and hasattr(request.state, "model"):
-        models = {
-            request.state.model["id"]: request.state.model,
-        }
-    else:
-        models = getattr(request.state, "MODELS", None) or {}
-        if not models:
-            await get_all_models(request, user=user)
-            models = getattr(request.state, "MODELS", None) or {}
-
-    model_id = form_data["model"]
-    if model_id not in models:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Model not found",
-        )
+    models = await _get_request_models(request, user)
+    model_id = _resolve_task_model_id(request, models, form_data["model"])
 
     task_model_id = get_task_model_id(
         model_id,
         request.app.state.config.TASK_MODEL,
         request.app.state.config.TASK_MODEL_EXTERNAL,
         models,
+        _get_ambiguous_model_aliases(request),
     )
 
     log.debug(
@@ -373,28 +368,15 @@ async def generate_queries(
                 detail=f"Query generation is disabled",
             )
 
-    if getattr(request.state, "direct", False) and hasattr(request.state, "model"):
-        models = {
-            request.state.model["id"]: request.state.model,
-        }
-    else:
-        models = getattr(request.state, "MODELS", None) or {}
-        if not models:
-            await get_all_models(request, user=user)
-            models = getattr(request.state, "MODELS", None) or {}
-
-    model_id = form_data["model"]
-    if model_id not in models:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Model not found",
-        )
+    models = await _get_request_models(request, user)
+    model_id = _resolve_task_model_id(request, models, form_data["model"])
 
     task_model_id = get_task_model_id(
         model_id,
         request.app.state.config.TASK_MODEL,
         request.app.state.config.TASK_MODEL_EXTERNAL,
         models,
+        _get_ambiguous_model_aliases(request),
     )
 
     log.debug(
@@ -461,28 +443,15 @@ async def generate_autocompletion(
                 detail=f"Input prompt exceeds maximum length of {request.app.state.config.AUTOCOMPLETE_GENERATION_INPUT_MAX_LENGTH}",
             )
 
-    if getattr(request.state, "direct", False) and hasattr(request.state, "model"):
-        models = {
-            request.state.model["id"]: request.state.model,
-        }
-    else:
-        models = getattr(request.state, "MODELS", None) or {}
-        if not models:
-            await get_all_models(request, user=user)
-            models = getattr(request.state, "MODELS", None) or {}
-
-    model_id = form_data["model"]
-    if model_id not in models:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Model not found",
-        )
+    models = await _get_request_models(request, user)
+    model_id = _resolve_task_model_id(request, models, form_data["model"])
 
     task_model_id = get_task_model_id(
         model_id,
         request.app.state.config.TASK_MODEL,
         request.app.state.config.TASK_MODEL_EXTERNAL,
         models,
+        _get_ambiguous_model_aliases(request),
     )
 
     log.debug(
@@ -530,28 +499,15 @@ async def generate_emoji(
             "skipped": True,
         }
 
-    if getattr(request.state, "direct", False) and hasattr(request.state, "model"):
-        models = {
-            request.state.model["id"]: request.state.model,
-        }
-    else:
-        models = getattr(request.state, "MODELS", None) or {}
-        if not models:
-            await get_all_models(request, user=user)
-            models = getattr(request.state, "MODELS", None) or {}
-
-    model_id = form_data["model"]
-    if model_id not in models:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Model not found",
-        )
+    models = await _get_request_models(request, user)
+    model_id = _resolve_task_model_id(request, models, form_data["model"])
 
     task_model_id = get_task_model_id(
         model_id,
         request.app.state.config.TASK_MODEL,
         request.app.state.config.TASK_MODEL_EXTERNAL,
         models,
+        _get_ambiguous_model_aliases(request),
     )
 
     log.debug(f"generating emoji using model {task_model_id} for user {user.email} ")
@@ -599,28 +555,15 @@ async def generate_emoji(
 async def generate_follow_ups(
     request: Request, form_data: dict, user=Depends(get_verified_user)
 ):
-    if getattr(request.state, "direct", False) and hasattr(request.state, "model"):
-        models = {
-            request.state.model["id"]: request.state.model,
-        }
-    else:
-        models = getattr(request.state, "MODELS", None) or {}
-        if not models:
-            await get_all_models(request, user=user)
-            models = getattr(request.state, "MODELS", None) or {}
-
-    model_id = form_data["model"]
-    if model_id not in models:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Model not found",
-        )
+    models = await _get_request_models(request, user)
+    model_id = _resolve_task_model_id(request, models, form_data["model"])
 
     task_model_id = get_task_model_id(
         model_id,
         request.app.state.config.TASK_MODEL,
         request.app.state.config.TASK_MODEL_EXTERNAL,
         models,
+        _get_ambiguous_model_aliases(request),
     )
 
     log.debug(
@@ -664,23 +607,8 @@ async def generate_moa_response(
     request: Request, form_data: dict, user=Depends(get_verified_user)
 ):
 
-    if getattr(request.state, "direct", False) and hasattr(request.state, "model"):
-        models = {
-            request.state.model["id"]: request.state.model,
-        }
-    else:
-        models = getattr(request.state, "MODELS", None) or {}
-        if not models:
-            await get_all_models(request, user=user)
-            models = getattr(request.state, "MODELS", None) or {}
-
-    model_id = form_data["model"]
-
-    if model_id not in models:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Model not found",
-        )
+    models = await _get_request_models(request, user)
+    model_id = _resolve_task_model_id(request, models, form_data["model"])
 
     template = DEFAULT_MOA_GENERATION_PROMPT_TEMPLATE
 

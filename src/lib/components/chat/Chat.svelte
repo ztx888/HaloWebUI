@@ -2864,10 +2864,14 @@
 			const chatContent = chat.chat;
 
 			if (chatContent) {
-				selectedModels =
-					(chatContent?.models ?? undefined) !== undefined
-						? chatContent.models
-						: [chatContent.models ?? ''];
+				const loadedModels =
+					(chatContent?.models ?? undefined) !== undefined ? chatContent.models : chatContent.model;
+				selectedModels = Array.isArray(loadedModels) ? loadedModels : [loadedModels ?? ''];
+				if (modelsMap.size > 0) {
+					selectedModels = selectedModels
+						.map((modelId) => getCanonicalModelId(modelId))
+						.filter(Boolean);
+				}
 				history =
 					(chatContent?.history ?? undefined) !== undefined
 						? chatContent.history
@@ -3974,11 +3978,19 @@
 
 		const responseMessageIds: Record<PropertyKey, string> = {};
 		// If modelId is provided, use it, else use selected model
-		let selectedModelIds = modelId
-			? [getCanonicalModelId(modelId) || modelId]
-			: atSelectedModel !== undefined
-				? [getModelSelectionId(atSelectedModel)]
-				: selectedModels;
+		let selectedModelIds = [];
+		if (modelId) {
+			const requestedModelId = `${modelId ?? ''}`.trim();
+			const resolvedModelId = getCanonicalModelId(requestedModelId);
+			if (!resolvedModelId || ambiguousModelIds.has(requestedModelId)) {
+				toast.error($i18n.t('Model connection is unavailable. Please select the model again.'));
+				return;
+			}
+			selectedModelIds = [resolvedModelId];
+		} else {
+			selectedModelIds =
+				atSelectedModel !== undefined ? [getModelSelectionId(atSelectedModel)] : selectedModels;
+		}
 
 		// Create response messages for each selected model
 		for (const [_modelIdx, modelId] of selectedModelIds.entries()) {

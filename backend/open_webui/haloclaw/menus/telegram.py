@@ -73,6 +73,7 @@ async def _get_available_models(app, gateway: GatewayModel) -> list[dict]:
     """Load models using the same approach as the dispatcher (FakeRequest + get_all_models)."""
     from open_webui.haloclaw.dispatcher import _FakeRequest
     from open_webui.utils.models import get_all_models
+    from open_webui.utils.model_identity import get_model_aliases, get_model_selection_id
     from open_webui.models.users import Users
 
     gateway_owner = Users.get_user_by_id(gateway.user_id)
@@ -85,18 +86,24 @@ async def _get_available_models(app, gateway: GatewayModel) -> list[dict]:
         fake_request = _FakeRequest(app)
         gateway_owner = maybe_migrate_user_connections(fake_request, gateway_owner)
         fake_request.state.connection_user = gateway_owner
-        await get_all_models(fake_request, user=gateway_owner)
-
-        models_dict = getattr(fake_request.state, "MODELS", {})
-        if not models_dict or not isinstance(models_dict, dict):
+        available_models = await get_all_models(fake_request, user=gateway_owner)
+        if not available_models:
             return []
 
         result = []
-        for model_id, model in models_dict.items():
+        seen = set()
+        for model in available_models:
+            if not isinstance(model, dict):
+                continue
+            model_id = get_model_selection_id(model) or model.get("id")
+            if not model_id or model_id in seen:
+                continue
+            seen.add(model_id)
             name = model.get("name", model_id)
             result.append({
                 "id": model_id,
                 "name": name,
+                "aliases": get_model_aliases(model),
                 "connection_name": model.get("connection_name"),
                 "owned_by": model.get("owned_by"),
             })
@@ -115,6 +122,19 @@ def _resolve_effective_model(gateway: GatewayModel, ext_user: ExternalUserModel)
     if HALOCLAW_DEFAULT_MODEL.value:
         return HALOCLAW_DEFAULT_MODEL.value, "全局默认"
     return "未设置", "未设置"
+
+
+def _model_matches_id(model: dict, model_id: str) -> bool:
+    if not model_id:
+        return False
+    return model.get("id") == model_id or model_id in (model.get("aliases") or [])
+
+
+def _resolve_model_display_id(models: list[dict], model_id: str) -> str:
+    for model in models:
+        if _model_matches_id(model, model_id):
+            return model.get("id") or model_id
+    return model_id
 
 
 # ---------------------------------------------------------------------------
@@ -459,11 +479,12 @@ async def _build_group_keyboard(gateway, ext_user, app, page: int):
     current_model, current_source = _resolve_effective_model(gateway, ext_user)
     if current_model == "未设置":
         current_model = ""
+    current_display_model = _resolve_model_display_id(models, current_model)
     # Find which group the current model belongs to
     current_group = ""
     if current_model:
         for m in models:
-            if m["id"] == current_model:
+            if _model_matches_id(m, current_model):
                 current_group = m.get("connection_name") or m.get("owned_by") or ""
                 break
 
@@ -498,7 +519,7 @@ async def _build_group_keyboard(gateway, ext_user, app, page: int):
         rows.append(nav)
 
     keyboard = InlineKeyboardMarkup(rows)
-    current_display = _truncate_model_name(current_model or "未设置")
+    current_display = _truncate_model_name(current_display_model or "未设置")
     text = (
         f"🤖 选择模型分组（共 {len(models)} 个模型）\n"
         f"当前: {current_display}（{current_source}）"
@@ -521,6 +542,7 @@ def _build_group_models_keyboard(group: dict, gidx: int, ext_user, gateway, page
     current_model, current_source = _resolve_effective_model(gateway, ext_user)
     if current_model == "未设置":
         current_model = ""
+    current_display_model = _resolve_model_display_id(models, current_model)
 
     rows = []
     if ext_user.model_override:
@@ -538,7 +560,7 @@ def _build_group_models_keyboard(group: dict, gidx: int, ext_user, gateway, page
             m = page_models[j]
             midx = start + j
             name = _truncate_model_name(m["name"], max_len=25)
-            if m["id"] == current_model:
+            if _model_matches_id(m, current_model):
                 name = f"✓ {name}"
             row.append(InlineKeyboardButton(name, callback_data=f"mg:{gidx}:s:{midx}"))
         rows.append(row)
@@ -557,7 +579,7 @@ def _build_group_models_keyboard(group: dict, gidx: int, ext_user, gateway, page
     rows.append([InlineKeyboardButton("↩ 返回分组列表", callback_data="mg:back")])
 
     keyboard = InlineKeyboardMarkup(rows)
-    current_display = _truncate_model_name(current_model or "未设置")
+    current_display = _truncate_model_name(current_display_model or "未设置")
     text = (
         f"🤖 {group['name']} ({len(models)} 个模型)\n"
         f"当前: {current_display}（{current_source}）"

@@ -2415,6 +2415,7 @@ async def chat_completion_tools_handler(
         request.app.state.config.TASK_MODEL,
         request.app.state.config.TASK_MODEL_EXTERNAL,
         models,
+        getattr(request.state, "MODELS_AMBIGUOUS", set()) or set(),
     )
 
     skip_files = False
@@ -3199,6 +3200,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
         request.app.state.config.TASK_MODEL,
         request.app.state.config.TASK_MODEL_EXTERNAL,
         models,
+        getattr(request.state, "MODELS_AMBIGUOUS", set()) or set(),
     )
 
     events = []

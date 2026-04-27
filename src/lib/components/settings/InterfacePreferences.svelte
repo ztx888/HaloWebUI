@@ -18,6 +18,7 @@
 	import { getUserPosition } from '$lib/utils';
 	import { getLanguages, changeLanguage, translateWithDefault } from '$lib/i18n';
 	import { getModelChatDisplayName } from '$lib/utils/model-display';
+	import { getModelSelectionId, resolveModelSelectionId } from '$lib/utils/model-identity';
 	import { setTextScale } from '$lib/utils/text-scale';
 	import { revealExpandedSection } from '$lib/utils/expanded-section-scroll';
 
@@ -303,6 +304,11 @@
 	// Admin-only user preferences (still stored per-user)
 
 	const normalizeModelId = (value: string | null | undefined) => String(value ?? '').trim();
+	const resolveDefaultModelId = (value: string | null | undefined) => {
+		const normalized = normalizeModelId(value);
+		if (!normalized) return '';
+		return resolveModelSelectionId($models ?? [], normalized, { preserveAmbiguous: true }) || normalized;
+	};
 
 	const normalizeImageCompressionSize = (
 		value: { width?: string | number | null; height?: string | number | null } | null | undefined
@@ -335,7 +341,7 @@
 	};
 
 	const getEffectiveDefaultModelId = () => {
-		return normalizeModelId($settings?.models?.at(0));
+		return resolveDefaultModelId($settings?.models?.at(0));
 	};
 
 	const applyTheme = (rawTheme: string) => {
@@ -556,7 +562,7 @@
 			promptSuggestions
 		},
 		chat: {
-			defaultModelId: normalizeModelId(defaultModelId),
+			defaultModelId: resolveDefaultModelId(defaultModelId),
 			titleAutoGenerate,
 			autoTags,
 			autoFollowUps,
@@ -609,7 +615,7 @@
 	};
 
 	const applyLayoutSnapshot = (snapshot: SectionSnapshot['layout']) => {
-		defaultModelId = normalizeModelId(snapshot.defaultModelId);
+		defaultModelId = resolveDefaultModelId(snapshot.defaultModelId);
 		showChatTitleInTab = snapshot.showChatTitleInTab;
 		showFeaturedAssistantsOnHome = snapshot.showFeaturedAssistantsOnHome;
 		landingPageMode = snapshot.landingPageMode;
@@ -1002,7 +1008,7 @@
 		chatSaving = true;
 		try {
 			await saveSettings({
-				models: normalizeModelId(defaultModelId) ? [normalizeModelId(defaultModelId)] : [],
+				models: resolveDefaultModelId(defaultModelId) ? [resolveDefaultModelId(defaultModelId)] : [],
 				title: {
 					...($settings?.title ?? {}),
 					auto: titleAutoGenerate
@@ -1096,6 +1102,13 @@
 
 	let rootClass = 'flex flex-col space-y-6 text-sm';
 	let bodyClass = 'space-y-6 overflow-y-auto scrollbar-hidden';
+	$: if (($models?.length ?? 0) > 0 && defaultModelId) {
+		const resolved = resolveDefaultModelId(defaultModelId);
+		if (resolved && resolved !== defaultModelId) {
+			defaultModelId = resolved;
+		}
+	}
+
 	$: {
 		rootClass = embedded
 			? 'flex flex-col space-y-6 text-sm'
@@ -2064,7 +2077,7 @@
 													options={[
 														{ value: '', label: $i18n.t('None') },
 														...($models ?? []).map((m) => ({
-															value: m.id,
+															value: getModelSelectionId(m),
 															label: getModelChatDisplayName(m)
 														}))
 													]}

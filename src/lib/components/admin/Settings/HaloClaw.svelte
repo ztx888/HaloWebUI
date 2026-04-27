@@ -7,6 +7,11 @@
 	import { getModels } from '$lib/apis';
 	import { getModelChatDisplayName } from '$lib/utils/model-display';
 	import {
+		getModelLegacyIds,
+		getModelSelectionId,
+		resolveModelSelectionId
+	} from '$lib/utils/model-identity';
+	import {
 		getHaloClawConfig,
 		updateHaloClawConfig,
 		getGateways,
@@ -77,7 +82,7 @@
 		platform: gateway?.platform ?? 'telegram',
 		name: gateway?.name ?? '',
 		config: cloneSettingsSnapshot(gateway?.config ?? {}),
-		default_model_id: gateway?.default_model_id || null,
+		default_model_id: resolveModelId(gateway?.default_model_id ?? '') || null,
 		system_prompt: gateway?.system_prompt || null,
 		access_policy: normalizeGatewayAccessPolicy(gateway?.access_policy),
 		enabled: Boolean(gateway?.enabled),
@@ -99,7 +104,7 @@
 
 	const buildMainSnapshot = () => ({
 		enabled: Boolean(haloclawEnabled),
-		default_model: defaultModel ?? '',
+		default_model: resolveModelId(defaultModel ?? ''),
 		max_history: normalizeMainNumber(maxHistory, 20),
 		rate_limit: normalizeMainNumber(rateLimit, 10)
 	});
@@ -131,8 +136,17 @@
 		);
 	};
 
+	const resolveModelId = (id: string) =>
+		resolveModelSelectionId(models ?? [], id, { preserveAmbiguous: true }) || id;
+
 	$: modelLabelById = new Map(
-		(models ?? []).map((m) => [m.id, getModelChatDisplayName(m) || m.name || m.id])
+		(models ?? []).flatMap((m) => {
+			const label = getModelChatDisplayName(m) || m.name || m.id;
+			const selectionId = getModelSelectionId(m);
+			return Array.from(new Set([m.id, selectionId, ...getModelLegacyIds(m)].filter(Boolean))).map(
+				(id): [string, string] => [id, label]
+			);
+		})
 	);
 	const formatModelLabel = (id: string) => modelLabelById.get(id) || id;
 
@@ -155,11 +169,11 @@
 		]);
 
 		haloclawEnabled = Boolean(loadedConfig?.enabled);
-		defaultModel = loadedConfig?.default_model ?? '';
+		models = allModels;
+		defaultModel = resolveModelId(loadedConfig?.default_model ?? '');
 		maxHistory = Number(loadedConfig?.max_history ?? 20);
 		rateLimit = Number(loadedConfig?.rate_limit ?? 10);
 		gateways = cloneSettingsSnapshot(loadedGateways ?? []);
-		models = allModels;
 		ready = true;
 		syncMainBaseline();
 		syncGatewaysBaseline();
@@ -170,13 +184,13 @@
 		try {
 			const res = await updateHaloClawConfig(localStorage.token, {
 				enabled: haloclawEnabled,
-				default_model: defaultModel,
+				default_model: resolveModelId(defaultModel),
 				max_history: Number(maxHistory),
 				rate_limit: Number(rateLimit)
 			});
 
 			haloclawEnabled = Boolean(res?.enabled);
-			defaultModel = res?.default_model ?? '';
+			defaultModel = resolveModelId(res?.default_model ?? '');
 			maxHistory = Number(res?.max_history ?? maxHistory);
 			rateLimit = Number(res?.rate_limit ?? rateLimit);
 			syncMainBaseline();
@@ -193,7 +207,7 @@
 		if (!initialMainSnapshot) return;
 		const next = cloneSettingsSnapshot(initialMainSnapshot);
 		haloclawEnabled = Boolean(next.enabled);
-		defaultModel = next.default_model ?? '';
+		defaultModel = resolveModelId(next.default_model ?? '');
 		maxHistory = Number(next.max_history ?? 20);
 		rateLimit = Number(next.rate_limit ?? 10);
 		syncMainDirty();
@@ -400,7 +414,7 @@
 												options={[
 													{ value: '', label: $i18n.t('Not set') },
 													...(models ?? []).map((m) => ({
-														value: m.id,
+														value: getModelSelectionId(m),
 														label: getModelChatDisplayName(m) || m.name || m.id
 													}))
 												]}
