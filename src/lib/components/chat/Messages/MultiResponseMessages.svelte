@@ -12,6 +12,7 @@
 	import ResponseMessage from './ResponseMessage.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import Merge from '$lib/components/icons/Merge.svelte';
+	import { getModelChatDisplayName } from '$lib/utils/model-display';
 	import { findModelByIdentity } from '$lib/utils/model-identity';
 
 	import Markdown from './Markdown.svelte';
@@ -296,7 +297,9 @@
 											onGroupClick(_messageId, modelIdx);
 										}}
 									>
-										{tabModel ? tabModel.name : history.messages[_messageId]?.model}
+										{tabModel
+											? getModelChatDisplayName(tabModel) || tabModel.name
+											: history.messages[_messageId]?.modelName || history.messages[_messageId]?.model}
 									</button>
 								{/if}
 							{/each}

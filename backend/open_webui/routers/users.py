@@ -300,6 +300,7 @@ async def update_user_settings_by_session_user(
             _as_dict(patch_ui.get("connections")),
             existing_connections=_get_ui_connections(existing_settings_dict),
             id_strategy="generated",
+            update_tombstones=True,
         )
         patch_payload["ui"] = patch_ui
 

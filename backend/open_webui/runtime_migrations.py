@@ -36,7 +36,7 @@ HALO_BACKUP_DIR = Path(
 HALO_STATE_TABLE = "halowebui_migration_state"
 HALO_DATA_MIGRATION_TABLE = "halowebui_data_migrations"
 HALO_TARGET_HEAD = "3d4e5f6a7b8c"
-HALO_CONNECTION_METADATA_BACKFILL_KEY = "connection_metadata_backfill_v1"
+HALO_CONNECTION_METADATA_BACKFILL_KEY = "connection_metadata_backfill_v2"
 HALO_IMAGE_GENERATION_OPTIONS_CLEANUP_KEY = "image_generation_options_cleanup_v1"
 HALO_SOURCE_FAMILIES = {
     "c440947495f3": "owui_070_family",
@@ -87,6 +87,7 @@ CHAT_META_KEYS = frozenset(
         "error",
         "usage",
         "model_id",
+        "model_ref",
         "modelName",
         "modelIdx",
         "completedAt",

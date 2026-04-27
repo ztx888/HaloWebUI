@@ -1322,7 +1322,7 @@ class ChatMessageTable:
             # Collect non-core fields into meta
             meta_keys = {
                 "files", "sources", "code_executions", "statusHistory",
-                "childrenIds", "models", "modelName", "modelIdx",
+                "childrenIds", "models", "modelName", "modelIdx", "model_ref",
                 "done", "error", "info", "completedAt", "userContext",
                 "merged", "lastSentence", "originalContent",
             }

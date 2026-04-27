@@ -29,6 +29,8 @@ from open_webui.models.users import UserModel, UserSettings, Users
 UI_KEY = "ui"
 CONNECTIONS_KEY = "connections"
 LEGACY_GLOBAL_CONNECTIONS_SEEDED_KEY = "_legacy_global_connections_seeded_v1"
+CONNECTION_ID_TOMBSTONES_KEY = "_HALO_CONNECTION_ID_TOMBSTONES"
+CONNECTION_ID_TOMBSTONES_LIMIT = 50
 CONNECTION_PROVIDER_SPECS = {
     "openai": {
         "urls_key": "OPENAI_API_BASE_URLS",
@@ -136,6 +138,124 @@ def _default_connection_name(url: str, idx: int) -> str:
         return f"Connection {idx + 1}"
 
 
+def _connection_name(cfg: dict, url: str, idx: int) -> str:
+    name = _clean_str(cfg.get("name") or cfg.get("remark"))
+    return name or _default_connection_name(url, idx)
+
+
+def _connection_signature(
+    provider: str,
+    url: Any,
+    cfg: Optional[dict],
+    *,
+    name: Optional[str] = None,
+) -> tuple[str, str, str, str]:
+    cfg = _as_dict(cfg)
+    return (
+        _clean_str(provider).lower(),
+        _normalize_connection_url(url),
+        _clean_str(cfg.get("auth_type")).lower(),
+        _clean_str(name if name is not None else cfg.get("name") or cfg.get("remark")),
+    )
+
+
+def _add_candidate(
+    candidates: dict[tuple[str, str, str, str], set[str]],
+    signature: tuple[str, str, str, str],
+    prefix_id: Any,
+) -> None:
+    prefix = _clean_str(prefix_id)
+    if not prefix:
+        return
+    candidates.setdefault(signature, set()).add(prefix)
+
+
+def _unique_candidate(
+    candidates: dict[tuple[str, str, str, str], set[str]],
+    signature: tuple[str, str, str, str],
+) -> str:
+    values = candidates.get(signature) or set()
+    return next(iter(values)) if len(values) == 1 else ""
+
+
+def _iter_active_connection_records(provider: str, provider_config: Optional[dict]):
+    spec = CONNECTION_PROVIDER_SPECS.get(provider)
+    provider_config = _as_dict(provider_config)
+    if spec is None:
+        return
+
+    urls = [_normalize_connection_url(url) for url in list(provider_config.get(spec["urls_key"]) or [])]
+    cfgs = _as_dict(provider_config.get(spec["configs_key"]))
+
+    for idx, url in enumerate(urls):
+        if not url:
+            continue
+        cfg = _as_dict(cfgs.get(str(idx), cfgs.get(url, {})))
+        prefix_id = _clean_str(cfg.get("prefix_id"))
+        if not prefix_id:
+            continue
+        name = _connection_name(cfg, url, idx)
+        signature = _connection_signature(provider, url, cfg, name=name)
+        yield {
+            "provider": signature[0],
+            "url": signature[1],
+            "auth_type": signature[2],
+            "name": signature[3],
+            "prefix_id": prefix_id,
+        }
+
+
+def _iter_tombstone_records(provider: str, provider_config: Optional[dict]):
+    for item in _as_dict(provider_config).get(CONNECTION_ID_TOMBSTONES_KEY) or []:
+        if not isinstance(item, dict):
+            continue
+        prefix_id = _clean_str(item.get("prefix_id"))
+        url = _normalize_connection_url(item.get("url"))
+        if not prefix_id or not url:
+            continue
+        yield {
+            "provider": _clean_str(item.get("provider") or provider).lower(),
+            "url": url,
+            "auth_type": _clean_str(item.get("auth_type")).lower(),
+            "name": _clean_str(item.get("name")),
+            "prefix_id": prefix_id,
+        }
+
+
+def _record_signature(record: dict) -> tuple[str, str, str, str]:
+    return (
+        _clean_str(record.get("provider")).lower(),
+        _normalize_connection_url(record.get("url")),
+        _clean_str(record.get("auth_type")).lower(),
+        _clean_str(record.get("name")),
+    )
+
+
+def _build_connection_tombstones(
+    provider: str,
+    *,
+    existing_provider_config: Optional[dict],
+    normalized_provider_config: Optional[dict],
+) -> list[dict]:
+    records = [
+        *list(_iter_tombstone_records(provider, existing_provider_config)),
+        *list(_iter_active_connection_records(provider, existing_provider_config)),
+        *list(_iter_active_connection_records(provider, normalized_provider_config)),
+    ]
+
+    deduped: list[dict] = []
+    seen: set[tuple[str, str, str, str, str]] = set()
+    for record in reversed(records):
+        signature = (*_record_signature(record), _clean_str(record.get("prefix_id")))
+        if signature in seen:
+            continue
+        seen.add(signature)
+        deduped.append(record)
+
+    deduped.reverse()
+    return deduped[-CONNECTION_ID_TOMBSTONES_LIMIT:]
+
+
 def _next_connection_id(
     *,
     id_strategy: str,
@@ -164,6 +284,7 @@ def normalize_provider_connection_config(
     *,
     existing_provider_config: Optional[dict] = None,
     id_strategy: str = "generated",
+    update_tombstones: bool = False,
 ) -> dict:
     spec = CONNECTION_PROVIDER_SPECS.get(provider)
     if spec is None:
@@ -191,8 +312,8 @@ def normalize_provider_connection_config(
     current_urls = list(current_provider.get(urls_key) or [])
     current_cfgs = _as_dict(current_provider.get(configs_key))
 
-    prev_prefix_by_url: dict[str, str] = {}
-    prev_empty_urls: set[str] = set()
+    prev_prefix_by_index: dict[int, tuple[str, str, str, str]] = {}
+    prev_prefix_by_signature: dict[tuple[str, str, str, str], set[str]] = {}
     for idx, prev_url in enumerate(current_urls):
         url_key = _normalize_connection_url(prev_url)
         if not url_key:
@@ -200,21 +321,22 @@ def normalize_provider_connection_config(
         cfg = _as_dict(current_cfgs.get(str(idx), current_cfgs.get(prev_url, {})))
         prefix_id = _clean_str(cfg.get("prefix_id"))
         if prefix_id:
-            prev_prefix_by_url.setdefault(url_key, prefix_id)
-        else:
-            prev_empty_urls.add(url_key)
+            auth_type = _clean_str(cfg.get("auth_type")).lower()
+            name = _connection_name(cfg, url_key, idx)
+            prev_prefix_by_index[idx] = (url_key, auth_type, name, prefix_id)
+            _add_candidate(
+                prev_prefix_by_signature,
+                _connection_signature(provider, url_key, cfg, name=name),
+                prefix_id,
+            )
 
-    preserved_empty_idx = None
-    for idx, url in enumerate(urls):
-        cfg = _as_dict(next_cfgs.get(str(idx), next_cfgs.get(url, {})))
-        if cfg.get("prefix_id", None) == "":
-            preserved_empty_idx = idx
-            break
-
-    if preserved_empty_idx is None and urls:
-        cfg0 = _as_dict(next_cfgs.get("0", next_cfgs.get(urls[0], {})))
-        if not _clean_str(cfg0.get("prefix_id")):
-            preserved_empty_idx = 0
+    tombstone_prefix_by_signature: dict[tuple[str, str, str, str], set[str]] = {}
+    for record in _iter_tombstone_records(provider, current_provider):
+        _add_candidate(
+            tombstone_prefix_by_signature,
+            _record_signature(record),
+            record.get("prefix_id"),
+        )
 
     used_prefix_ids: set[str] = set()
     normalized_cfgs: dict[str, dict] = {}
@@ -226,45 +348,52 @@ def normalize_provider_connection_config(
         if not name:
             name = _default_connection_name(url, idx)
 
-        prefix_id = prev_prefix_by_url.get(url_key) or _clean_str(cfg.get("prefix_id"))
-        if not prefix_id:
-            if preserved_empty_idx == idx:
-                prefix_id = ""
-            else:
-                key_value = (
-                    keys[idx]
-                    if keys_key and idx < len(keys)
-                    else cfg.get("key", None)
-                )
-                prefix_id = _next_connection_id(
-                    id_strategy=id_strategy,
-                    provider=provider,
-                    url=url,
-                    api_key=key_value,
-                    auth_type=cfg.get("auth_type"),
-                )
+        prefix_id = _clean_str(cfg.get("prefix_id"))
+        auth_type = _clean_str(cfg.get("auth_type")).lower()
+        prev_index_match = prev_prefix_by_index.get(idx)
+        if (
+            not prefix_id
+            and prev_index_match
+            and prev_index_match[0] == url_key
+            and prev_index_match[1] == auth_type
+            and prev_index_match[2] == name
+        ):
+            prefix_id = prev_index_match[3]
 
-        if prefix_id:
-            duplicate_seed = idx
-            while prefix_id in used_prefix_ids:
-                prefix_id = _next_connection_id(
-                    id_strategy=id_strategy,
-                    provider=provider,
-                    url=url,
-                    api_key=(keys[idx] if keys_key and idx < len(keys) else cfg.get("key", None)),
-                    auth_type=cfg.get("auth_type"),
-                    duplicate_seed=str(duplicate_seed),
-                )
-                duplicate_seed += 1
-            used_prefix_ids.add(prefix_id)
+        signature = _connection_signature(provider, url_key, cfg, name=name)
+        if not prefix_id:
+            prefix_id = _unique_candidate(prev_prefix_by_signature, signature)
+        if not prefix_id:
+            prefix_id = _unique_candidate(tombstone_prefix_by_signature, signature)
+        if not prefix_id:
+            key_value = (
+                keys[idx]
+                if keys_key and idx < len(keys)
+                else cfg.get("key", None)
+            )
+            prefix_id = _next_connection_id(
+                id_strategy=id_strategy,
+                provider=provider,
+                url=url,
+                api_key=key_value,
+                auth_type=cfg.get("auth_type"),
+            )
+
+        duplicate_seed = idx
+        while not prefix_id or prefix_id in used_prefix_ids:
+            prefix_id = _next_connection_id(
+                id_strategy=id_strategy,
+                provider=provider,
+                url=url,
+                api_key=(keys[idx] if keys_key and idx < len(keys) else cfg.get("key", None)),
+                auth_type=cfg.get("auth_type"),
+                duplicate_seed=str(duplicate_seed),
+            )
+            duplicate_seed += 1
+        used_prefix_ids.add(prefix_id)
 
         normalized_cfg = {**cfg, "name": name}
-        if prefix_id:
-            normalized_cfg["prefix_id"] = prefix_id
-        elif preserved_empty_idx == idx:
-            normalized_cfg["prefix_id"] = ""
-        else:
-            normalized_cfg.pop("prefix_id", None)
+        normalized_cfg["prefix_id"] = prefix_id
 
         normalized_cfgs[str(idx)] = normalized_cfg
 
@@ -272,6 +401,12 @@ def normalize_provider_connection_config(
     if keys_key:
         next_provider[keys_key] = keys
     next_provider[configs_key] = normalized_cfgs
+    if update_tombstones:
+        next_provider[CONNECTION_ID_TOMBSTONES_KEY] = _build_connection_tombstones(
+            provider,
+            existing_provider_config=current_provider,
+            normalized_provider_config=next_provider,
+        )
     return next_provider
 
 
@@ -280,6 +415,7 @@ def normalize_connections_payload(
     *,
     existing_connections: Optional[dict] = None,
     id_strategy: str = "generated",
+    update_tombstones: bool = False,
 ) -> dict:
     current_connections = _as_dict(existing_connections)
     next_connections = deepcopy(_as_dict(connections))
@@ -299,6 +435,7 @@ def normalize_connections_payload(
             provider_config,
             existing_provider_config=current_connections.get(provider),
             id_strategy=id_strategy,
+            update_tombstones=update_tombstones,
         )
 
     return next_connections
@@ -416,10 +553,15 @@ def maybe_migrate_user_connections(request, user: UserModel) -> UserModel:
 
 def get_user_connections(user: Optional[UserModel]) -> dict:
     """
-    Return ui.connections dict. Call maybe_migrate_user_connections() earlier to ensure it's present.
+    Return ui.connections with read-only compatibility normalization.
     """
     ui = _get_ui_settings(user)
-    return _as_dict(ui.get(CONNECTIONS_KEY))
+    connections = _as_dict(ui.get(CONNECTIONS_KEY))
+    return normalize_connections_payload(
+        connections,
+        existing_connections=connections,
+        id_strategy="derived",
+    )
 
 
 def set_user_connection_provider_config(
@@ -447,6 +589,7 @@ def set_user_connection_provider_config(
         provider_config,
         existing_provider_config=connections.get(provider),
         id_strategy="generated",
+        update_tombstones=True,
     )
     ui[CONNECTIONS_KEY] = connections
 

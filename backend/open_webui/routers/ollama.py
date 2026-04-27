@@ -245,10 +245,17 @@ def _resolve_ollama_connection_by_model_id(
     parsed_selection = parse_selection_id(model_id)
     if parsed_selection and parsed_selection.get("provider") == "ollama":
         model_ref = parsed_selection.get("model_ref") or {}
+        ref_index = model_ref.get("connection_index")
+        ref_connection_id = str(model_ref.get("connection_id") or "").strip()
+        if (
+            not ref_connection_id
+            and ref_index is not None
+            and str(ref_index).strip() != ""
+            and len([url for url in base_urls if str(url or "").strip()]) > 1
+        ):
+            raise HTTPException(status_code=400, detail="模型连接不明确，请重新选择模型。")
         for idx, url in enumerate(base_urls):
             cfg = cfgs.get(str(idx), cfgs.get(url, {})) or {}
-            ref_index = model_ref.get("connection_index")
-            ref_connection_id = str(model_ref.get("connection_id") or "").strip()
             cfg_prefix = str(cfg.get("prefix_id") or "").strip()
             if (
                 (ref_connection_id and cfg_prefix == ref_connection_id)

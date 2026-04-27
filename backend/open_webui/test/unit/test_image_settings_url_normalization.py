@@ -1514,6 +1514,100 @@ def test_chat_image_generation_uses_model_ref_to_pick_prefixed_openai_connection
     assert captured["source"]["key"] == "relay-key"
 
 
+def test_image_model_ref_with_legacy_index_does_not_guess_when_multiple_sources(monkeypatch):
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                config=SimpleNamespace(
+                    ENABLE_IMAGE_GENERATION_SHARED_KEY=False,
+                    IMAGES_OPENAI_API_BASE_URL="",
+                    IMAGES_OPENAI_API_KEY="",
+                    IMAGES_OPENAI_API_FORCE_MODE=False,
+                    IMAGES_GEMINI_API_BASE_URL="",
+                    IMAGES_GEMINI_API_FORCE_MODE=False,
+                    IMAGES_GROK_API_BASE_URL="",
+                )
+            )
+        )
+    )
+    user = SimpleNamespace(id="user-1", role="admin")
+
+    monkeypatch.setattr(
+        images_router.openai_router,
+        "_get_openai_user_config",
+        lambda _user: (
+            ["https://api.openai.com/v1", "https://relay.example.com/v1"],
+            ["official-key", "relay-key"],
+            {
+                "0": {"remark": "Official", "prefix_id": "00000000"},
+                "1": {"remark": "Relay", "prefix_id": "7ad57b3e"},
+            },
+        ),
+    )
+
+    source = images_router._select_runtime_image_provider_source_from_ref(
+        request,
+        user,
+        "openai",
+        {"provider": "openai", "source": "personal", "connection_index": 0},
+        model_id="gpt-image-2",
+    )
+
+    assert source is None
+
+
+def test_image_model_ref_with_legacy_index_uses_unique_configured_model(monkeypatch):
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                config=SimpleNamespace(
+                    ENABLE_IMAGE_GENERATION_SHARED_KEY=False,
+                    IMAGES_OPENAI_API_BASE_URL="",
+                    IMAGES_OPENAI_API_KEY="",
+                    IMAGES_OPENAI_API_FORCE_MODE=False,
+                    IMAGES_GEMINI_API_BASE_URL="",
+                    IMAGES_GEMINI_API_FORCE_MODE=False,
+                    IMAGES_GROK_API_BASE_URL="",
+                )
+            )
+        )
+    )
+    user = SimpleNamespace(id="user-1", role="admin")
+
+    monkeypatch.setattr(
+        images_router.openai_router,
+        "_get_openai_user_config",
+        lambda _user: (
+            ["https://api.openai.com/v1", "https://relay.example.com/v1"],
+            ["official-key", "relay-key"],
+            {
+                "0": {
+                    "remark": "Official",
+                    "prefix_id": "00000000",
+                    "model_ids": ["gpt-image-1"],
+                },
+                "1": {
+                    "remark": "Relay",
+                    "prefix_id": "7ad57b3e",
+                    "model_ids": ["gpt-image-2"],
+                },
+            },
+        ),
+    )
+
+    source = images_router._select_runtime_image_provider_source_from_ref(
+        request,
+        user,
+        "openai",
+        {"provider": "openai", "source": "personal", "connection_index": 0},
+        model_id="gpt-image-2",
+    )
+
+    assert source is not None
+    assert source["connection_index"] == 1
+    assert source["key"] == "relay-key"
+
+
 def test_runtime_image_plain_model_keeps_selecting_only_matching_openai_connection(monkeypatch):
     request = SimpleNamespace(
         app=SimpleNamespace(

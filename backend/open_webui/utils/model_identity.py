@@ -16,7 +16,7 @@ STALE_MODEL_REF_CODE = "model_connection_stale"
 
 
 def _clean_str(value: Any) -> str:
-    return str(value or "").strip()
+    return "" if value is None else str(value).strip()
 
 
 def _encode(value: Any) -> str:
@@ -127,8 +127,6 @@ def build_selection_id(
 
     if normalized_connection_id:
         connection_token = f"id:{_encode(normalized_connection_id)}"
-    elif connection_index is not None and _clean_str(connection_index) != "":
-        connection_token = f"idx:{_encode(connection_index)}"
     else:
         connection_token = "none"
 
@@ -461,6 +459,70 @@ def resolve_provider_connection_by_model_id(
         upstream_model_id = requested_model_id
 
     if effective_model_ref:
+        ref_connection_id = _clean_str(
+            effective_model_ref.get("connection_id") or effective_model_ref.get("prefix_id")
+        )
+        ref_connection_index = effective_model_ref.get("connection_index")
+        if (
+            not ref_connection_id
+            and ref_connection_index is not None
+            and _clean_str(ref_connection_index) != ""
+        ):
+            request_candidates = _find_request_model_candidates(
+                provider=_clean_str(provider).lower(),
+                upstream_model_id=upstream_model_id,
+                request_models=request_models,
+            )
+            if len(request_candidates) > 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail=build_model_resolution_error(
+                        code=AMBIGUOUS_MODEL_CODE,
+                        detail=AMBIGUOUS_MODEL_DETAIL,
+                        requested_model_id=requested_model_id,
+                        candidates=[
+                            model.get("selection_id") or model.get("id")
+                            for model in request_candidates
+                            if isinstance(model, dict)
+                        ],
+                    ),
+                )
+            if len(request_candidates) == 1:
+                candidate_ref = get_model_ref_from_model(request_candidates[0])
+                candidate_connection_id = _clean_str(
+                    candidate_ref.get("connection_id") or candidate_ref.get("prefix_id")
+                )
+                if candidate_connection_id:
+                    return resolve_provider_connection_by_model_id(
+                        provider=provider,
+                        model_id=upstream_model_id,
+                        base_urls=base_urls,
+                        keys=keys,
+                        cfgs=cfgs,
+                        model_ref=candidate_ref,
+                        request_models=request_models,
+                    )
+
+            usable_indices = []
+            for idx, url in enumerate(base_urls):
+                if not _clean_str(url):
+                    continue
+
+                cfg = _get_connection_cfg(cfgs, base_urls, idx)
+                if cfg.get("enable", True) is False:
+                    continue
+
+                usable_indices.append(idx)
+            if len(usable_indices) > 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail=build_model_resolution_error(
+                        code=AMBIGUOUS_MODEL_CODE,
+                        detail=AMBIGUOUS_MODEL_DETAIL,
+                        requested_model_id=requested_model_id,
+                    ),
+                )
+
         for idx, _url in enumerate(base_urls):
             cfg = _get_connection_cfg(cfgs, base_urls, idx)
             if _connection_matches_ref(

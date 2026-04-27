@@ -23,6 +23,7 @@ from open_webui.utils.model_identity import (
     get_model_aliases,
     get_model_ref_from_model,
     get_model_selection_id,
+    parse_selection_id,
 )
 
 
@@ -333,6 +334,154 @@ async def get_all_models(request, user: UserModel = None):
                     return m
         return None
 
+    def _model_meta_dict(model_row) -> dict:
+        meta = getattr(model_row, "meta", None)
+        if not meta:
+            return {}
+        try:
+            dumped = meta.model_dump()
+            return dumped if isinstance(dumped, dict) else {}
+        except Exception:
+            return meta if isinstance(meta, dict) else {}
+
+    def _clean_model_id_hint(value) -> str:
+        parsed = parse_selection_id(value)
+        if parsed:
+            return parsed.get("model_id") or ""
+        return str(value or "").strip()
+
+    def _candidate_clean_id(model: dict) -> str:
+        return str(
+            model.get("model_id")
+            or model.get("original_id")
+            or model.get("id")
+            or ""
+        ).strip()
+
+    def _model_ref_matches(candidate: dict, target_ref: dict) -> bool:
+        if not isinstance(candidate, dict) or not isinstance(target_ref, dict):
+            return False
+
+        candidate_ref = get_model_ref_from_model(candidate)
+        if not candidate_ref:
+            return False
+
+        target_provider = str(target_ref.get("provider") or "").strip().lower()
+        candidate_provider = str(candidate_ref.get("provider") or "").strip().lower()
+        if target_provider and candidate_provider and target_provider != candidate_provider:
+            return False
+
+        target_source = str(target_ref.get("source") or "").strip()
+        candidate_source = str(candidate_ref.get("source") or "").strip()
+        if target_source and candidate_source and target_source != candidate_source:
+            return False
+
+        target_connection_id = str(
+            target_ref.get("connection_id") or target_ref.get("prefix_id") or ""
+        ).strip()
+        if target_connection_id:
+            candidate_connection_id = str(
+                candidate_ref.get("connection_id") or candidate_ref.get("prefix_id") or ""
+            ).strip()
+            return candidate_connection_id == target_connection_id
+
+        target_index = target_ref.get("connection_index")
+        if target_index is not None and str(target_index).strip() != "":
+            candidate_index = candidate_ref.get("connection_index")
+            return (
+                "" if candidate_index is None else str(candidate_index).strip()
+            ) == str(target_index).strip()
+
+        return False
+
+    def _model_ref_scope_matches(candidate: dict, target_ref: dict) -> bool:
+        if not isinstance(candidate, dict) or not isinstance(target_ref, dict):
+            return False
+
+        candidate_ref = get_model_ref_from_model(candidate)
+        if not candidate_ref:
+            return False
+
+        target_provider = str(target_ref.get("provider") or "").strip().lower()
+        candidate_provider = str(candidate_ref.get("provider") or "").strip().lower()
+        if target_provider and candidate_provider and target_provider != candidate_provider:
+            return False
+
+        target_source = str(target_ref.get("source") or "").strip()
+        candidate_source = str(candidate_ref.get("source") or "").strip()
+        if target_source and candidate_source and target_source != candidate_source:
+            return False
+
+        return True
+
+    def _find_model_by_ref(
+        models_list: list[dict],
+        model_ref: dict,
+        model_id_hint=None,
+    ) -> Optional[dict]:
+        clean_hint = _clean_model_id_hint(model_id_hint)
+        target_connection_id = str(
+            model_ref.get("connection_id") or model_ref.get("prefix_id") or ""
+        ).strip()
+        target_index = model_ref.get("connection_index")
+        if (
+            not target_connection_id
+            and target_index is not None
+            and str(target_index).strip() != ""
+        ):
+            if not clean_hint:
+                return None
+            scoped_matches = [
+                candidate
+                for candidate in models_list or []
+                if _model_ref_scope_matches(candidate, model_ref)
+                and (
+                    _candidate_clean_id(candidate) == clean_hint
+                    or clean_hint in get_model_aliases(candidate)
+                )
+            ]
+            scoped_by_id = {
+                get_model_selection_id(candidate): candidate
+                for candidate in scoped_matches
+                if get_model_selection_id(candidate)
+            }
+            if len(scoped_by_id) != 1:
+                return None
+            return next(iter(scoped_by_id.values()))
+
+        matches = []
+        for candidate in models_list or []:
+            if not _model_ref_matches(candidate, model_ref):
+                continue
+            if (
+                clean_hint
+                and _candidate_clean_id(candidate) != clean_hint
+                and clean_hint not in get_model_aliases(candidate)
+            ):
+                continue
+            matches.append(candidate)
+
+        return matches[0] if len(matches) == 1 else None
+
+    def _resolve_base_model(custom_model, models_list: list[dict]) -> Optional[dict]:
+        meta = _model_meta_dict(custom_model)
+
+        base_like = _find_model_like(models_list, custom_model.base_model_id)
+        if base_like:
+            return base_like
+
+        base_model_ref = meta.get("base_model_ref") or meta.get("model_ref")
+        if isinstance(base_model_ref, dict):
+            base_like = _find_model_by_ref(
+                models_list,
+                base_model_ref,
+                meta.get("base_selection_id") or custom_model.base_model_id,
+            )
+            if base_like:
+                return base_like
+
+        return _find_model_like(models_list, meta.get("base_selection_id"))
+
     custom_models = Models.get_all_models()
 
     # 1) Apply base model overrides (base_model_id == None).
@@ -412,12 +561,15 @@ async def get_all_models(request, user: UserModel = None):
         pipe = None
         action_ids = []
 
-        base_like = _find_model_like(models, custom_model.base_model_id)  # user's own base models
+        base_like = _resolve_base_model(custom_model, models)  # user's own base models
         if base_like is None and custom_model.user_id:
             owner_id = custom_model.user_id
             if owner_id not in owner_base_models_cache:
                 owner_base_models_cache[owner_id] = await _owner_base_models_by_user_id(owner_id)
-            base_like = _find_model_like(owner_base_models_cache.get(owner_id, []), custom_model.base_model_id)
+            base_like = _resolve_base_model(
+                custom_model,
+                owner_base_models_cache.get(owner_id, []),
+            )
 
         if not base_like:
             # Skip orphaned preset models whose upstream/base model no longer exists for the

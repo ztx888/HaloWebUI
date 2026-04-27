@@ -890,7 +890,9 @@
 
 <DeleteConfirmDialog
 	bind:show={showRegenerateConfirm}
-	title={$i18n.t('Regenerate with {{modelName}}?', { modelName: model?.name ?? message.model })}
+	title={$i18n.t('Regenerate with {{modelName}}?', {
+		modelName: getModelChatDisplayName(model) || message.modelName || message.model
+	})}
 	on:confirm={() => {
 		doRegenerate();
 	}}
@@ -923,9 +925,9 @@
 
 		<div class="flex-auto w-0 sm:pl-1 relative z-10">
 			<Name>
-				<Tooltip content={getModelChatDisplayName(model) || message.model} placement="top-start">
+				<Tooltip content={getModelChatDisplayName(model) || message.modelName || message.model} placement="top-start">
 					<span class="line-clamp-1 text-black dark:text-white font-semibold">
-						{getModelChatDisplayName(model) || message.model}
+						{getModelChatDisplayName(model) || message.modelName || message.model}
 					</span>
 				</Tooltip>
 

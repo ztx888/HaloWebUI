@@ -1,5 +1,6 @@
 from test.util.abstract_integration_test import AbstractPostgresTest
 from test.util.mock_user import mock_webui_user
+import re
 import time
 
 
@@ -212,7 +213,10 @@ class TestUsers(AbstractPostgresTest):
 
         assert response.status_code == 200
         assert response.json()["ui"]["connections"]["openai"]["OPENAI_API_CONFIGS"]["0"]["name"] == "Wong"
-        assert response.json()["ui"]["connections"]["openai"]["OPENAI_API_CONFIGS"]["0"]["prefix_id"] == ""
+        assert re.fullmatch(
+            r"[0-9a-f]{8}",
+            response.json()["ui"]["connections"]["openai"]["OPENAI_API_CONFIGS"]["0"]["prefix_id"],
+        )
         assert invalidated == ["2"]
         assert app.state.BASE_MODELS is None
         assert app.state.MODELS == {}
@@ -248,24 +252,14 @@ class TestUsers(AbstractPostgresTest):
             )
 
         assert response.status_code == 200
-        assert response.json() == {
-            "ui": {
-                "connections": {
-                    "openai": {
-                        "OPENAI_API_BASE_URLS": ["https://api.example.com/v1"],
-                        "OPENAI_API_KEYS": [""],
-                        "OPENAI_API_CONFIGS": {
-                            "0": {
-                                "name": "api.example.com",
-                                "prefix_id": "",
-                            }
-                        },
-                    }
-                },
-                "autoFollowUps": False,
-            },
-            "revision": 2,
-        }
+        payload = response.json()
+        assert payload["revision"] == 2
+        assert payload["ui"]["autoFollowUps"] is False
+        openai = payload["ui"]["connections"]["openai"]
+        assert openai["OPENAI_API_BASE_URLS"] == ["https://api.example.com/v1"]
+        assert openai["OPENAI_API_KEYS"] == [""]
+        assert openai["OPENAI_API_CONFIGS"]["0"]["name"] == "api.example.com"
+        assert re.fullmatch(r"[0-9a-f]{8}", openai["OPENAI_API_CONFIGS"]["0"]["prefix_id"])
 
     def test_update_user_settings_replaces_connections_subtree_without_leaking_old_flags(self):
         with mock_webui_user(id="2"):
@@ -351,15 +345,12 @@ class TestUsers(AbstractPostgresTest):
             "https://api.example.com/v1"
         ]
         assert payload["ui"]["connections"]["openai"]["OPENAI_API_KEYS"] == ["sk-new"]
-        assert payload["ui"]["connections"]["openai"]["OPENAI_API_CONFIGS"] == {
-            "0": {
-                "remark": "Primary",
-                "auth_type": "bearer",
-                "model_ids": ["gpt-4.1"],
-                "name": "Primary",
-                "prefix_id": "",
-            }
-        }
+        openai_cfg = payload["ui"]["connections"]["openai"]["OPENAI_API_CONFIGS"]["0"]
+        assert openai_cfg["remark"] == "Primary"
+        assert openai_cfg["auth_type"] == "bearer"
+        assert openai_cfg["model_ids"] == ["gpt-4.1"]
+        assert openai_cfg["name"] == "Primary"
+        assert re.fullmatch(r"[0-9a-f]{8}", openai_cfg["prefix_id"])
 
     def test_update_user_settings_rejects_stale_revision(self):
         with mock_webui_user(id="2"):

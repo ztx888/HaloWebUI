@@ -1279,13 +1279,19 @@ def _image_source_matches_selection_hint(
         if source_connection_index is not None
         else ""
     )
+    hint_connection_index = hint.get("connection_index")
+    normalized_hint_connection_index = (
+        str(hint_connection_index).strip()
+        if hint_connection_index is not None
+        else ""
+    )
 
     return (
         str(source.get("provider") or "").strip() == str(hint.get("provider") or "").strip()
         and str(source.get("effective_source") or "").strip()
         == str(hint.get("effective_source") or "").strip()
         and normalized_source_connection_index
-        == str(hint.get("connection_index") or "").strip()
+        == normalized_hint_connection_index
         and base_hash == str(hint.get("base_hash") or "").strip()
     )
 
@@ -1296,20 +1302,7 @@ def _image_source_matches_model_ref(
     if not isinstance(source, dict) or not isinstance(model_ref, dict):
         return False
 
-    provider = str(model_ref.get("provider") or "").strip().lower()
-    if (
-        provider in {"openai", "gemini", "grok"}
-        and provider != str(source.get("provider") or "").strip().lower()
-    ):
-        return False
-
-    effective_source = str(
-        model_ref.get("source") or model_ref.get("effective_source") or ""
-    ).strip().lower()
-    if (
-        effective_source
-        and effective_source != str(source.get("effective_source") or "").strip().lower()
-    ):
+    if not _image_source_scope_matches_model_ref(source, model_ref):
         return False
 
     has_precise_ref = False
@@ -1340,10 +1333,38 @@ def _image_source_matches_model_ref(
         if source_connection_id != connection_id:
             return False
 
+    effective_source = str(
+        model_ref.get("source") or model_ref.get("effective_source") or ""
+    ).strip().lower()
     if effective_source in {"shared", "settings"}:
         return True
 
     return has_precise_ref
+
+
+def _image_source_scope_matches_model_ref(
+    source: dict[str, Any], model_ref: Optional[dict[str, Any]]
+) -> bool:
+    if not isinstance(source, dict) or not isinstance(model_ref, dict):
+        return False
+
+    provider = str(model_ref.get("provider") or "").strip().lower()
+    if (
+        provider in {"openai", "gemini", "grok"}
+        and provider != str(source.get("provider") or "").strip().lower()
+    ):
+        return False
+
+    effective_source = str(
+        model_ref.get("source") or model_ref.get("effective_source") or ""
+    ).strip().lower()
+    if (
+        effective_source
+        and effective_source != str(source.get("effective_source") or "").strip().lower()
+    ):
+        return False
+
+    return True
 
 
 def _select_runtime_image_provider_source_from_ref(
@@ -1352,6 +1373,7 @@ def _select_runtime_image_provider_source_from_ref(
     engine: str,
     model_ref: Optional[dict[str, Any]],
     *,
+    model_id: str = "",
     prefer_shared: bool = False,
 ) -> Optional[dict[str, Any]]:
     if not isinstance(model_ref, dict) or not model_ref:
@@ -1366,6 +1388,35 @@ def _select_runtime_image_provider_source_from_ref(
         strict=False,
         prefer_shared=prefer_shared,
     )
+    connection_id = str(
+        model_ref.get("connection_id") or model_ref.get("prefix_id") or ""
+    ).strip()
+    connection_index = model_ref.get("connection_index")
+    if (
+        not connection_id
+        and connection_index is not None
+        and str(connection_index).strip() != ""
+    ):
+        scoped_sources = [
+            source
+            for source in candidate_sources
+            if _image_source_scope_matches_model_ref(source, model_ref)
+        ]
+        normalized_model_id = str(model_id or "").strip()
+        if normalized_model_id:
+            configured_matches = [
+                source
+                for source in scoped_sources
+                if normalized_model_id
+                in _normalize_config_model_ids(source.get("api_config"))
+            ]
+            if len(configured_matches) == 1:
+                return configured_matches[0]
+            if len(configured_matches) > 1:
+                return None
+        if len(scoped_sources) > 1:
+            return None
+
     for source in candidate_sources:
         if _image_source_matches_model_ref(source, model_ref):
             return source
@@ -4406,6 +4457,7 @@ async def image_generations(
                     connection_user,
                     "openai",
                     model_ref,
+                    model_id=selected_model,
                     prefer_shared=not bool(form_data.model) and bool(selected_model),
                 )
                 if source is None and model_ref:
@@ -4555,6 +4607,7 @@ async def image_generations(
                     connection_user,
                     "gemini",
                     model_ref,
+                    model_id=selected_model,
                     prefer_shared=not bool(form_data.model) and bool(selected_model),
                 )
                 if source is None and model_ref:
@@ -4681,6 +4734,7 @@ async def image_generations(
                     connection_user,
                     "grok",
                     model_ref,
+                    model_id=selected_model,
                     prefer_shared=not bool(form_data.model) and bool(selected_model),
                 )
                 if source is None and model_ref:

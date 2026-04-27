@@ -71,6 +71,12 @@
 		resolveModelSelectionId
 	} from '$lib/utils/model-identity';
 	import {
+		buildModelSelectionHint,
+		resolveChatModelSelection,
+		resolveChatModelSelections,
+		type ChatModelResolution
+	} from '$lib/utils/chat-model-recovery';
+	import {
 		type ChatAssistantSnapshot,
 		PENDING_ASSISTANT_STORAGE_KEY,
 		toChatAssistantSnapshot
@@ -429,11 +435,9 @@
 
 	// J-3-01: O(1) model lookup map — rebuilt reactively when $models changes
 	let modelsMap: Map<string, Model> = new Map();
-	let ambiguousModelIds: Set<string> = new Set();
 	$: {
 		const lookup = buildModelIdentityLookup($models);
 		modelsMap = lookup.byId;
-		ambiguousModelIds = lookup.ambiguous;
 	}
 	const getModelById = (id: string): Model | undefined => modelsMap.get(id);
 	const getCanonicalModelId = (id: string): string =>
@@ -486,9 +490,14 @@
 		rawModelId?: string;
 		ambiguous?: boolean;
 	}) => {
-		if (index >= 0 && index < selectedModels.length) {
-			selectedModels[index] = '';
-			selectedModels = [...selectedModels];
+		const selectorIndex = Math.max(0, index);
+		if (selectorIndex >= 0) {
+			const nextSelectedModels = [...selectedModels];
+			while (nextSelectedModels.length <= selectorIndex) {
+				nextSelectedModels.push('');
+			}
+			nextSelectedModels[selectorIndex] = '';
+			selectedModels = nextSelectedModels;
 		}
 
 		if (ambiguous) {
@@ -505,7 +514,127 @@
 			);
 		}
 
-		await openModelSelector(index, rawModelId);
+		await openModelSelector(selectorIndex, rawModelId);
+	};
+	const isBlockingModelResolution = (resolution: ChatModelResolution | null | undefined) =>
+		resolution?.status === 'stale' || resolution?.status === 'ambiguous';
+	const promptModelResolution = async (
+		resolution: ChatModelResolution,
+		index = 0
+	) => {
+		await promptModelReselection({
+			index,
+			rawModelId: resolution.searchValue || resolution.value,
+			ambiguous: resolution.status === 'ambiguous'
+		});
+	};
+	const resolveSelectedModel = (modelId: unknown, index = 0) =>
+		resolveChatModelSelection($models, {
+			value: modelId,
+			...(buildPersistedModelSelectionHints(selectedModels)[index] ?? {})
+		});
+	const findBlockingSelectedModelResolution = () => {
+		for (const [index, modelId] of selectedModels.entries()) {
+			const resolution = resolveSelectedModel(modelId, index);
+			if (isBlockingModelResolution(resolution)) {
+				return { index, resolution };
+			}
+		}
+		return null;
+	};
+	const resolveMessageModel = (message: any) =>
+		resolveChatModelSelection($models, {
+			value: message?.model,
+			model_ref: message?.model_ref,
+			display_name: message?.modelName
+		});
+	const applyResolvedMessageModel = (message: any, resolution: ChatModelResolution) => {
+		if (!message || resolution.status !== 'resolved' || !resolution.model) {
+			return;
+		}
+
+		message.model = resolution.value;
+		message.modelName = getModelChatDisplayName(resolution.model) || resolution.model.id || resolution.value;
+		const modelRef = getModelRef(resolution.model);
+		if (modelRef) {
+			message.model_ref = modelRef;
+		}
+	};
+	const getChatModelSelectionHints = (chatContent: any) =>
+		Array.isArray(chatContent?.model_selection_hints)
+			? chatContent.model_selection_hints
+			: [];
+	const buildPersistedModelSelectionHints = (modelIds: string[] = selectedModels) =>
+		modelIds.map((modelId) => {
+			const model = getModelById(modelId);
+			return (
+				buildModelSelectionHint(model) ?? {
+					selection_id: `${modelId ?? ''}`.trim(),
+					model_id: `${modelId ?? ''}`.trim()
+				}
+			);
+		});
+	const recoverLoadedChatModelState = (
+		chatContent: any,
+		loadedHistory: any,
+		loadedModels: unknown
+	) => {
+		const rawModels = Array.isArray(loadedModels) ? loadedModels : [loadedModels ?? ''];
+		const hints = getChatModelSelectionHints(chatContent);
+		const selectedResolutions = resolveChatModelSelections($models, rawModels, hints);
+		const latestResolvedByIndex = new Map<number, { resolution: ChatModelResolution; timestamp: number }>();
+
+		for (const message of Object.values(loadedHistory?.messages ?? {}) as any[]) {
+			if (!message || typeof message !== 'object') continue;
+
+			if (Array.isArray(message.models)) {
+				message.models = message.models.map((modelId: unknown, index: number) => {
+					const resolution = resolveChatModelSelection($models, { value: modelId });
+					return resolution.status === 'resolved' ? resolution.value : modelId;
+				});
+			}
+
+			if (message.role !== 'assistant') continue;
+
+			const resolution = resolveMessageModel(message);
+			if (resolution.status === 'resolved') {
+				applyResolvedMessageModel(message, resolution);
+				const modelIdx =
+					typeof message.modelIdx === 'number'
+						? message.modelIdx
+						: Number.isInteger(Number(message.modelIdx))
+							? Number(message.modelIdx)
+							: 0;
+				const timestamp = Number(message.timestamp ?? 0);
+				const previous = latestResolvedByIndex.get(modelIdx);
+				if (!previous || timestamp >= previous.timestamp) {
+					latestResolvedByIndex.set(modelIdx, { resolution, timestamp });
+				}
+			}
+		}
+
+		const nextSelectedModels = selectedResolutions.map((resolution, index) => {
+			if (resolution.status === 'resolved') return resolution.value;
+			const inferred = latestResolvedByIndex.get(index)?.resolution;
+			if (inferred?.status === 'resolved') return inferred.value;
+			return resolution.value;
+		});
+		for (const [index, item] of latestResolvedByIndex.entries()) {
+			if (index >= nextSelectedModels.length && item.resolution.status === 'resolved') {
+				while (nextSelectedModels.length < index) {
+					nextSelectedModels.push('');
+				}
+				nextSelectedModels[index] = item.resolution.value;
+			}
+		}
+
+		if (nextSelectedModels.length === 0 && latestResolvedByIndex.size > 0) {
+			return Array.from(latestResolvedByIndex.entries())
+				.sort(([left], [right]) => left - right)
+				.map(([, item]) => item.resolution.value);
+		}
+
+		return nextSelectedModels.length > 0 ? nextSelectedModels : [''];
 	};
 	const getVisibleSkillIds = () =>
 		($skillsStore ?? []).map((skill) => String(skill?.id ?? '')).filter((id) => id);
@@ -1756,6 +1885,7 @@
 		persistedSelectionThreads: PersistedSelectionThreads = selectionThreads
 	) => ({
 		models: selectedModels,
+		model_selection_hints: buildPersistedModelSelectionHints(selectedModels),
 		history: historyState,
 		messages,
 		params,
@@ -1922,7 +2052,10 @@
 			try {
 				const stored = JSON.parse(value);
 				const valid = stored
-					.map((id: string) => getCanonicalModelId(id))
+					.map((id: string) => {
+						const resolution = resolveChatModelSelection($models, { value: id });
+						return resolution.status === 'resolved' ? resolution.value : resolution.value;
+					})
 					.filter((id: string) => id);
 				if (valid.length > 0) {
 					selectedModels = valid;
@@ -2709,7 +2842,10 @@
 				(modelId) => `${modelId ?? ''}`.trim() !== ''
 			);
 			selectedModels = selectedModels
-				.map((modelId) => getCanonicalModelId(modelId))
+				.map((modelId) => {
+					const resolution = resolveChatModelSelection($models, { value: modelId });
+					return resolution.status === 'resolved' ? resolution.value : resolution.value;
+				})
 				.filter((modelId) => modelId);
 			if (
 				selectedModels.length === 0 ||
@@ -2873,7 +3009,10 @@
 
 		// Only validate model IDs when models are actually loaded
 		if (modelsMap.size > 0) {
-			selectedModels = selectedModels.map((modelId) => getCanonicalModelId(modelId));
+			selectedModels = selectedModels.map((modelId) => {
+				const resolution = resolveChatModelSelection($models, { value: modelId });
+				return resolution.status === 'resolved' ? resolution.value : resolution.value;
+			});
 		}
 
 		const userSettings = await getUserSettings(localStorage.token);
@@ -2971,18 +3110,23 @@
 			const chatContent = chat.chat;
 
 			if (chatContent) {
+				if ($models.length === 0) {
+					await ensureModels(localStorage.token, { reason: 'chat-history-model-recovery' }).catch(() => {});
+					await tick();
+				}
+
 				const loadedModels =
 					(chatContent?.models ?? undefined) !== undefined ? chatContent.models : chatContent.model;
-				selectedModels = Array.isArray(loadedModels) ? loadedModels : [loadedModels ?? ''];
-				if (modelsMap.size > 0) {
-					selectedModels = selectedModels
-						.map((modelId) => getCanonicalModelId(modelId))
-						.filter(Boolean);
-				}
 				history =
 					(chatContent?.history ?? undefined) !== undefined
 						? chatContent.history
 						: convertMessagesToHistory(chatContent.messages);
+				selectedModels =
+					modelsMap.size > 0
+						? recoverLoadedChatModelState(chatContent, history, loadedModels)
+						: Array.isArray(loadedModels)
+							? loadedModels
+							: [loadedModels ?? ''];
 
 				chatTitle.set(chatContent.title);
 
@@ -3421,6 +3565,23 @@
 	};
 	const chatCompletedHandler = async (chatId, modelId, responseMessageId, messages) => {
 		const responseModelIndex = history.messages[responseMessageId]?.modelIdx ?? 0;
+		const responseModelResolution = resolveMessageModel(history.messages[responseMessageId]);
+		if (
+			isBlockingModelResolution(responseModelResolution) ||
+			responseModelResolution.status !== 'resolved'
+		) {
+			await promptModelResolution(responseModelResolution, responseModelIndex);
+			history.messages[responseMessageId].error = {
+				type: 'model_resolution_error',
+				content: responseModelResolution.status === 'ambiguous'
+					? $i18n.t('Model connection is ambiguous. Please select the model again.')
+					: $i18n.t('Model connection is unavailable. Please select the model again.')
+			};
+			await saveChatHandler(chatId, history);
+			return;
+		}
+		applyResolvedMessageModel(history.messages[responseMessageId], responseModelResolution);
+		modelId = responseModelResolution.value;
 		const res = await chatCompleted(localStorage.token, {
 			model: modelId,
 			messages: messages.map((m) => ({
@@ -3506,6 +3667,23 @@
 	const chatActionHandler = async (chatId, actionId, modelId, responseMessageId, event = null) => {
 		const messages = createMessagesList(history, responseMessageId);
 		const responseModelIndex = history.messages[responseMessageId]?.modelIdx ?? 0;
+		const responseModelResolution = resolveMessageModel(history.messages[responseMessageId]);
+		if (
+			isBlockingModelResolution(responseModelResolution) ||
+			responseModelResolution.status !== 'resolved'
+		) {
+			await promptModelResolution(responseModelResolution, responseModelIndex);
+			history.messages[responseMessageId].error = {
+				type: 'model_resolution_error',
+				content: responseModelResolution.status === 'ambiguous'
+					? $i18n.t('Model connection is ambiguous. Please select the model again.')
+					: $i18n.t('Model connection is unavailable. Please select the model again.')
+			};
+			await saveChatHandler(chatId, history);
+			return;
+		}
+		applyResolvedMessageModel(history.messages[responseMessageId], responseModelResolution);
+		modelId = responseModelResolution.value;
 
 		const res = await chatAction(localStorage.token, actionId, {
 			model: modelId,
@@ -3686,9 +3864,9 @@
 				role: 'assistant',
 				content: `[RESPONSE] ${responseMessageId}`,
 				done: true,
-
 				model: modelId,
 				modelName: getModelChatDisplayName(model) || model?.id || modelId,
+				...(getModelRef(model) ? { model_ref: getModelRef(model) } : {}),
 				modelIdx: 0,
 				timestamp: Math.floor(Date.now() / 1000)
 			};
@@ -3749,6 +3927,7 @@
 					done: true,
 					model: model ? getModelRequestId(model) : modelId,
 					modelName: getModelChatDisplayName(model) || model?.id || modelId,
+					...(getModelRef(model) ? { model_ref: getModelRef(model) } : {}),
 					modelIdx: 0,
 					timestamp: Math.floor(Date.now() / 1000),
 					...message
@@ -3968,13 +4147,11 @@
 
 	const submitPrompt = async (userPrompt, { _raw = false } = {}) => {
 		const messages = createMessagesList(history, history.currentId);
-		const ambiguousSelectionIndex = selectedModels.findIndex((modelId) =>
-			ambiguousModelIds.has(`${modelId ?? ''}`.trim())
-		);
-		const _selectedModels = selectedModels.map((modelId) => getCanonicalModelId(modelId));
-		if (JSON.stringify(selectedModels) !== JSON.stringify(_selectedModels)) {
-			selectedModels = _selectedModels;
-		}
+		const blockingSelection = findBlockingSelectedModelResolution();
+		const _selectedModels = selectedModels.map((modelId, index) => {
+			const resolution = resolveSelectedModel(modelId, index);
+			return resolution.status === 'resolved' ? resolution.value : '';
+		});
 
 		const failedFiles = files.filter((file) => isFailedUploadFile(file));
 		const validFiles = files.filter((file) => !isFailedUploadFile(file));
@@ -3991,13 +4168,12 @@
 			toast.error($i18n.t('Please enter a prompt'));
 			return;
 		}
-		if (ambiguousSelectionIndex !== -1) {
-			await promptModelReselection({
-				index: ambiguousSelectionIndex,
-				rawModelId: `${selectedModels[ambiguousSelectionIndex] ?? ''}`.trim(),
-				ambiguous: true
-			});
+		if (blockingSelection) {
+			await promptModelResolution(blockingSelection.resolution, blockingSelection.index);
 			return;
+		}
+		if (JSON.stringify(selectedModels) !== JSON.stringify(_selectedModels)) {
+			selectedModels = _selectedModels;
 		}
 		if (selectedModels.includes('')) {
 			toast.error($i18n.t('Model not selected'));
@@ -4124,19 +4300,42 @@
 		let selectedModelIds = [];
 		if (modelId) {
 			const requestedModelId = `${modelId ?? ''}`.trim();
-			const resolvedModelId = getCanonicalModelId(requestedModelId);
-			if (!resolvedModelId || ambiguousModelIds.has(requestedModelId)) {
-				await promptModelReselection({
-					index: typeof modelIdx === 'number' ? modelIdx : 0,
-					rawModelId: requestedModelId,
-					ambiguous: ambiguousModelIds.has(requestedModelId)
-				});
+			const sourceMessage =
+				typeof modelIdx === 'number'
+					? Object.values(history.messages).find(
+							(message: any) => message?.role === 'assistant' && message?.model === requestedModelId
+						)
+					: null;
+			const resolution = resolveChatModelSelection($models, {
+				value: requestedModelId,
+				model_ref: (sourceMessage as any)?.model_ref,
+				display_name: (sourceMessage as any)?.modelName
+			});
+			if (isBlockingModelResolution(resolution) || resolution.status !== 'resolved') {
+				await promptModelResolution(resolution, typeof modelIdx === 'number' ? modelIdx : 0);
 				return;
 			}
-			selectedModelIds = [resolvedModelId];
+			selectedModelIds = [resolution.value];
 		} else {
-			selectedModelIds =
+			const rawSelectedModelIds =
 				atSelectedModel !== undefined ? [getModelSelectionId(atSelectedModel)] : selectedModels;
+			for (const [index, rawModelId] of rawSelectedModelIds.entries()) {
+				const resolution =
+					atSelectedModel !== undefined
+						? resolveChatModelSelection($models, { value: rawModelId })
+						: resolveSelectedModel(rawModelId, index);
+				if (isBlockingModelResolution(resolution) || resolution.status !== 'resolved') {
+					await promptModelResolution(resolution, index);
+					return;
+				}
+				selectedModelIds.push(resolution.value);
+			}
+			if (
+				atSelectedModel === undefined &&
+				JSON.stringify(selectedModels) !== JSON.stringify(selectedModelIds)
+			) {
+				selectedModels = selectedModelIds;
+			}
 		}
 
 		// Create response messages for each selected model
@@ -4153,6 +4352,7 @@
 					content: '',
 					model: getModelRequestId(model),
 					modelName: getModelChatDisplayName(model) || model.id,
+					...(getModelRef(model) ? { model_ref: getModelRef(model) } : {}),
 					modelIdx: modelIdx ? modelIdx : _modelIdx,
 					userContext: null,
 					timestamp: Math.floor(Date.now() / 1000), // Unix epoch
@@ -4995,22 +5195,22 @@
 			await tick();
 
 			const requestedModelId = `${responseMessage?.model ?? ''}`.trim();
-			const resolvedModelId = getCanonicalModelId(requestedModelId);
-			if (!resolvedModelId || ambiguousModelIds.has(requestedModelId)) {
-				await promptModelReselection({
-					index: responseMessage.modelIdx ?? 0,
-					rawModelId: requestedModelId,
-					ambiguous: ambiguousModelIds.has(requestedModelId)
-				});
+			const resolution = resolveMessageModel(responseMessage);
+			if (isBlockingModelResolution(resolution) || resolution.status !== 'resolved') {
+				await promptModelResolution(resolution, responseMessage.modelIdx ?? 0);
 				responseMessage.done = true;
 				history.messages[history.currentId] = responseMessage;
 				return;
 			}
 
-			const model = getModelById(resolvedModelId);
+			const model = getModelById(resolution.value);
 
 			if (model) {
 				responseMessage.model = getModelRequestId(model);
+				const modelRef = getModelRef(model);
+				if (modelRef) {
+					responseMessage.model_ref = modelRef;
+				}
 				history.messages[history.currentId] = responseMessage;
 				await sendPromptSocket(history, model, responseMessage.id, _chatId);
 				return;
