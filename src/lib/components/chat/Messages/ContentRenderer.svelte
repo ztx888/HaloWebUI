@@ -105,6 +105,7 @@
 	let resizeObserver: ResizeObserver | undefined;
 	let messagesContainerElement: HTMLElement | null = null;
 	let syncThreadLayoutsRaf = 0;
+	let hadThreadLayouts = false;
 
 	const INLINE_CITATION_SELECTOR = '[data-inline-citation="true"]';
 
@@ -232,7 +233,27 @@
 		event.clipboardData.setData('text/html', payload.html);
 	};
 
+	const resetThreadLayoutsIfIdle = () => {
+		if (!hadThreadLayouts && Object.keys(threadLayouts).length === 0) {
+			return;
+		}
+
+		if (syncThreadLayoutsRaf) {
+			cancelAnimationFrame(syncThreadLayoutsRaf);
+			syncThreadLayoutsRaf = 0;
+		}
+
+		threadLayouts = {};
+		hadThreadLayouts = false;
+		clearSelectionHighlights();
+	};
+
 	const scheduleThreadLayoutSync = () => {
+		if (currentMessageThreads.length === 0) {
+			resetThreadLayoutsIfIdle();
+			return;
+		}
+
 		if (syncThreadLayoutsRaf) {
 			cancelAnimationFrame(syncThreadLayoutsRaf);
 		}
@@ -417,7 +438,15 @@
 	const syncThreadLayouts = async () => {
 		if (!contentContainerElement) {
 			threadLayouts = {};
-			clearSelectionHighlights();
+			if (hadThreadLayouts) {
+				clearSelectionHighlights();
+			}
+			hadThreadLayouts = false;
+			return;
+		}
+
+		if (currentMessageThreads.length === 0) {
+			resetThreadLayoutsIfIdle();
 			return;
 		}
 
@@ -451,6 +480,7 @@
 		}
 
 		threadLayouts = nextLayouts;
+		hadThreadLayouts = true;
 		applySelectionHighlights(regularRanges, activeRanges);
 
 		if (invalidThreadIds.length > 0) {

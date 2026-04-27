@@ -5208,6 +5208,9 @@
 									onBranchMessage={branchMessageToCurrentChat}
 									{branchingMessageId}
 									branchSupported={Boolean($chatId && $chatId !== 'local' && !$temporaryChatEnabled)}
+									initialMessagesCount={chatIdProp ? 6 : 20}
+									messagesLoadStep={chatIdProp ? 6 : 20}
+									deferOffscreenRendering={Boolean(chatIdProp)}
 									bottomPadding={files.length > 0}
 								/>
 								<div bind:this={scrollSentinel} class="h-px w-full shrink-0" />

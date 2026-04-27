@@ -52,22 +52,38 @@
 	export let readOnly = false;
 	export let showAllMessages = false;
 	export let forceExpandContent = false;
+	export let initialMessagesCount = 20;
+	export let messagesLoadStep = 20;
+	export let deferOffscreenRendering = false;
 
 	export let bottomPadding = false;
 	export let autoScroll;
 
-	let messagesCount = 20;
+	let messagesCount = initialMessagesCount;
 	let messagesLoading = false;
+	let lastMessageWindowKey = '';
+
+	$: {
+		const messageWindowKey = `${chatId}:${initialMessagesCount}:${messagesLoadStep}:${showAllMessages}`;
+		if (messageWindowKey !== lastMessageWindowKey) {
+			lastMessageWindowKey = messageWindowKey;
+			messagesCount = initialMessagesCount;
+		}
+	}
 
 	const loadMoreMessages = async () => {
-		// scroll slightly down to disable continuous loading
 		const element = document.getElementById('messages-container');
-		element.scrollTop = element.scrollTop + 100;
+		const previousScrollHeight = element?.scrollHeight ?? 0;
+		const previousScrollTop = element?.scrollTop ?? 0;
 
 		messagesLoading = true;
-		messagesCount += 20;
+		messagesCount += messagesLoadStep;
 
 		await tick();
+
+		if (element) {
+			element.scrollTop = previousScrollTop + (element.scrollHeight - previousScrollHeight);
+		}
 
 		messagesLoading = false;
 	};
@@ -455,6 +471,7 @@
 							{triggerScroll}
 							{readOnly}
 							{forceExpandContent}
+							deferOffscreenRendering={deferOffscreenRendering && !showAllMessages}
 						/>
 					{/each}
 				</div>
