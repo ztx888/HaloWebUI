@@ -98,6 +98,14 @@ def test_dedicated_image_model_uses_current_chat_model_before_admin_default():
         form_data = {
             "model": "13eca07c.gemini-3.1-flash-image-preview",
             "messages": [{"role": "user", "content": "生成一张图"}],
+            "features": {
+                "image_generation_options": {
+                    "size": "900x1600",
+                    "image_size": "1K",
+                    "negative_prompt": "low quality",
+                    "unknown": "must be removed",
+                }
+            },
         }
         model = {
             "id": "13eca07c.gemini-3.1-flash-image-preview",
@@ -123,3 +131,7 @@ def test_dedicated_image_model_uses_current_chat_model_before_admin_default():
         "connection_index": 1,
         "connection_id": "13eca07c",
     }
+    assert captured["image_generation_options"]["image_size"] == "1K"
+    assert captured["image_generation_options"]["negative_prompt"] == "low quality"
+    assert "size" not in captured["image_generation_options"]
+    assert "unknown" not in captured["image_generation_options"]

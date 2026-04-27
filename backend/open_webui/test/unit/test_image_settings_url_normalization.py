@@ -18,6 +18,7 @@ from open_webui.routers.images import _generate_via_xai_images  # noqa: E402
 from open_webui.routers.images import _resolve_image_provider_source  # noqa: E402
 from open_webui.routers.images import _select_runtime_image_provider_source  # noqa: E402
 from open_webui.routers.images import _sync_image_provider_config_state  # noqa: E402
+from open_webui.utils import middleware  # noqa: E402
 
 
 def test_image_size_auto_normalizes_to_no_exact_size():
@@ -29,6 +30,52 @@ def test_image_size_auto_normalizes_to_no_exact_size():
 def test_image_size_auto_keeps_derived_dimensions_safe():
     assert images_router._size_to_aspect_ratio("auto") is None
     assert images_router._size_to_gemini_image_size("auto") is None
+
+
+def test_chat_image_generation_handler_removes_legacy_size_before_generate_form(monkeypatch):
+    captured = {}
+    events = []
+
+    async def fake_image_generations(request, form_data, user):
+        captured["form_data"] = form_data
+        return [{"url": "/api/v1/files/generated"}]
+
+    async def fake_event_emitter(event):
+        events.append(event)
+
+    monkeypatch.setattr(middleware, "image_generations", fake_image_generations)
+
+    metadata = {
+        "image_generation_options": {
+            "model": "gpt-image-2",
+            "size": "900x1600",
+            "image_size": "1K",
+            "aspect_ratio": "16:9",
+            "unknown": "must be removed",
+        }
+    }
+
+    asyncio.run(
+        middleware.chat_image_generation_handler(
+            request=SimpleNamespace(),
+            form_data={"messages": [{"role": "user", "content": "生成一张图"}]},
+            extra_params={
+                "__event_emitter__": fake_event_emitter,
+                "__metadata__": metadata,
+            },
+            user=SimpleNamespace(id="user-1", role="admin"),
+        )
+    )
+
+    form_data = captured["form_data"]
+    assert form_data.model == "gpt-image-2"
+    assert form_data.size is None
+    assert form_data.image_size == "1K"
+    assert form_data.aspect_ratio == "16:9"
+    assert events[0]["data"]["description"] == "Generating an image"
+    assert metadata["local_response"]["choices"][0]["message"]["images"] == [
+        {"type": "image", "url": "/api/v1/files/generated"}
+    ]
 
 
 def test_openai_image_settings_auto_append_v1():
@@ -1305,6 +1352,79 @@ def test_image_generation_uses_selection_key_to_pick_duplicate_openai_connection
     assert captured["model_id"] == "gpt-image-2"
     assert captured["source"]["connection_index"] == 1
     assert captured["source"]["key"] == "key-b"
+
+
+def test_chat_image_generation_does_not_inherit_global_image_size(monkeypatch):
+    cfg = SimpleNamespace(
+        ENABLE_IMAGE_GENERATION=True,
+        IMAGE_GENERATION_ENGINE="openai",
+        IMAGE_GENERATION_MODEL="",
+        IMAGE_SIZE="900x1600",
+        IMAGE_ASPECT_RATIO="1:1",
+        IMAGE_RESOLUTION="1k",
+        ENABLE_IMAGE_GENERATION_SHARED_KEY=False,
+        IMAGES_OPENAI_API_BASE_URL="",
+        IMAGES_OPENAI_API_KEY="",
+        IMAGES_OPENAI_API_FORCE_MODE=False,
+        IMAGE_MODEL_FILTER_REGEX="",
+    )
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(config=cfg)))
+    user = SimpleNamespace(id="user-1", role="admin")
+
+    monkeypatch.setattr(
+        images_router.openai_router,
+        "_get_openai_user_config",
+        lambda _user: (
+            ["https://relay.example.com/v1"],
+            ["key-a"],
+            {"0": {"remark": "A"}},
+        ),
+    )
+
+    async def fake_discover(_request, _user, engine, source):
+        assert engine == "openai"
+        return [
+            images_router._build_image_model_entry(
+                model_id="gpt-image-2",
+                name="gpt-image-2",
+                generation_mode="openai_images",
+                detection_method="metadata",
+                supports_background=False,
+                supports_batch=True,
+                size_mode="exact",
+                text_output_supported=False,
+                source=source,
+            )
+        ]
+
+    captured = {}
+
+    async def fake_images_endpoint(_request, _user, **kwargs):
+        captured.update(kwargs)
+        return [{"url": "/api/v1/files/generated"}]
+
+    monkeypatch.setattr(images_router, "_discover_image_models_for_source", fake_discover)
+    monkeypatch.setattr(
+        images_router,
+        "_generate_via_openai_images_endpoint",
+        fake_images_endpoint,
+    )
+
+    result = asyncio.run(
+        images_router.image_generations(
+            request,
+            images_router.GenerateImageForm(
+                prompt="draw a dog",
+                model="gpt-image-2",
+                chat_generation=True,
+            ),
+            user=user,
+        )
+    )
+
+    assert result == [{"url": "/api/v1/files/generated"}]
+    assert captured["model_id"] == "gpt-image-2"
+    assert captured["size"] is None
 
 
 def test_chat_image_generation_uses_model_ref_to_pick_prefixed_openai_connection(monkeypatch):

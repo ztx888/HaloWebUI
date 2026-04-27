@@ -4333,17 +4333,17 @@ async def image_generations(
             detail="Image generation is disabled by the administrator.",
         )
 
-    configured_size = str(request.app.state.config.IMAGE_SIZE or "auto").strip().lower() or "auto"
+    configured_size_value = (
+        "auto" if form_data.chat_generation else request.app.state.config.IMAGE_SIZE
+    )
+    configured_size = str(configured_size_value or "auto").strip().lower() or "auto"
     effective_size = _normalize_exact_image_size(configured_size)
-    explicit_size = effective_size
-    if form_data.size is not None:
+    if not form_data.chat_generation and form_data.size is not None:
         requested_size = str(form_data.size or "").strip().lower() or "auto"
         if requested_size == "auto":
             effective_size = None
-            explicit_size = None
         elif re.match(r"^\d+x\d+$", requested_size):
             effective_size = requested_size
-            explicit_size = requested_size
         else:
             raise HTTPException(
                 status_code=400,

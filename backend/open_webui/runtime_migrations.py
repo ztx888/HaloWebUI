@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
+import sqlalchemy as sa
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Connection, Engine, URL, make_url
 from sqlalchemy.pool import NullPool
@@ -36,6 +37,7 @@ HALO_STATE_TABLE = "halowebui_migration_state"
 HALO_DATA_MIGRATION_TABLE = "halowebui_data_migrations"
 HALO_TARGET_HEAD = "3d4e5f6a7b8c"
 HALO_CONNECTION_METADATA_BACKFILL_KEY = "connection_metadata_backfill_v1"
+HALO_IMAGE_GENERATION_OPTIONS_CLEANUP_KEY = "image_generation_options_cleanup_v1"
 HALO_SOURCE_FAMILIES = {
     "c440947495f3": "owui_070_family",
     "a1b2c3d4e5f6": "owui_080_family",
@@ -812,12 +814,105 @@ def _backfill_user_connection_metadata(conn: Connection) -> dict[str, int]:
     return {"scanned_users": scanned_users, "updated_users": updated_users}
 
 
+def _cleanup_legacy_image_generation_options(conn: Connection) -> dict[str, int]:
+    from open_webui.utils.image_generation_options import (
+        sanitize_chat_payload_image_generation_options,
+    )
+
+    updated_configs = 0
+    scanned_chats = 0
+    updated_chats = 0
+
+    if _table_exists(conn, "config"):
+        config_table = sa.table(
+            "config",
+            sa.column("id", sa.Integer()),
+            sa.column("data", sa.JSON()),
+        )
+        rows = conn.execute(
+            sa.select(config_table.c.id, config_table.c.data)
+        ).mappings().all()
+        for row in rows:
+            config_data = _settings_payload_to_dict(row.get("data"))
+            image_generation = config_data.get("image_generation")
+            if not isinstance(image_generation, dict):
+                continue
+
+            if image_generation.get("size") == "auto":
+                continue
+
+            image_generation["size"] = "auto"
+            conn.execute(
+                config_table.update()
+                .where(config_table.c.id == row["id"])
+                .values(data=config_data)
+            )
+            updated_configs += 1
+
+    if not _table_exists(conn, "chat"):
+        return {
+            "updated_configs": updated_configs,
+            "scanned_chats": scanned_chats,
+            "updated_chats": updated_chats,
+        }
+
+    chat_table = sa.table(
+        "chat",
+        sa.column("id", sa.String()),
+        sa.column("chat", sa.JSON()),
+    )
+    batch_size = 1000
+    offset = 0
+    base_query = sa.select(chat_table.c.id, chat_table.c.chat).order_by(chat_table.c.id)
+
+    while True:
+        rows = conn.execute(base_query.limit(batch_size).offset(offset)).mappings().all()
+        if not rows:
+            break
+
+        offset += len(rows)
+        for row in rows:
+            scanned_chats += 1
+            chat_payload = row.get("chat")
+            if isinstance(chat_payload, str):
+                try:
+                    chat_payload = json.loads(chat_payload)
+                except Exception:
+                    continue
+
+            cleaned_chat, changed = sanitize_chat_payload_image_generation_options(
+                chat_payload
+            )
+            if not changed:
+                continue
+
+            conn.execute(
+                chat_table.update()
+                .where(chat_table.c.id == row["id"])
+                .values(chat=cleaned_chat)
+            )
+            updated_chats += 1
+
+    return {
+        "updated_configs": updated_configs,
+        "scanned_chats": scanned_chats,
+        "updated_chats": updated_chats,
+    }
+
+
 def _run_post_halo_data_migrations(conn: Connection) -> None:
     if not _has_completed_data_migration(conn, HALO_CONNECTION_METADATA_BACKFILL_KEY):
         details = _backfill_user_connection_metadata(conn)
         _mark_data_migration_completed(
             conn,
             HALO_CONNECTION_METADATA_BACKFILL_KEY,
+            details,
+        )
+    if not _has_completed_data_migration(conn, HALO_IMAGE_GENERATION_OPTIONS_CLEANUP_KEY):
+        details = _cleanup_legacy_image_generation_options(conn)
+        _mark_data_migration_completed(
+            conn,
+            HALO_IMAGE_GENERATION_OPTIONS_CLEANUP_KEY,
             details,
         )
 

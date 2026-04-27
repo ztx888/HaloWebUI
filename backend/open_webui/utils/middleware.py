@@ -70,6 +70,10 @@ from open_webui.routers.gemini import (
 
 from open_webui.utils.webhook import post_webhook
 from open_webui.utils.chat_image_refs import extract_chat_image_file_id
+from open_webui.utils.image_generation_options import (
+    CHAT_IMAGE_GENERATION_OPTION_KEYS,
+    sanitize_chat_image_generation_options,
+)
 
 
 from open_webui.models.users import UserModel
@@ -2927,8 +2931,8 @@ async def chat_image_generation_handler(
         extra_params.get("__metadata__", {})
         .get("image_generation_options", {})
     )
-    image_generation_options = (
-        image_generation_options if isinstance(image_generation_options, dict) else {}
+    image_generation_options = sanitize_chat_image_generation_options(
+        image_generation_options
     )
 
     system_message_content = ""
@@ -2941,19 +2945,7 @@ async def chat_image_generation_handler(
                     "prompt": prompt,
                     **{
                         key: image_generation_options.get(key)
-                        for key in (
-                            "model",
-                            "model_ref",
-                            "size",
-                            "image_size",
-                            "aspect_ratio",
-                            "n",
-                            "negative_prompt",
-                            "credential_source",
-                            "connection_index",
-                            "steps",
-                            "background",
-                        )
+                        for key in CHAT_IMAGE_GENERATION_OPTION_KEYS
                         if image_generation_options.get(key) is not None
                     },
                     **(
@@ -3270,6 +3262,16 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     features = form_data.pop("features", None)
     if features is not None and not isinstance(features, dict):
         features = None
+    elif isinstance(features, dict):
+        features = dict(features)
+        if "image_generation_options" in features:
+            image_generation_options = sanitize_chat_image_generation_options(
+                features.get("image_generation_options")
+            )
+            if image_generation_options:
+                features["image_generation_options"] = image_generation_options
+            else:
+                features.pop("image_generation_options", None)
 
     skip_text_enhancements = is_dedicated_image_generation_model(model)
 
@@ -3283,9 +3285,9 @@ async def process_chat_payload(request, form_data, user, metadata, model):
 
         if image_generation_enabled and image_generation_allowed:
             features = dict(features or {})
-            image_generation_options = features.get("image_generation_options")
-            if not isinstance(image_generation_options, dict):
-                image_generation_options = {}
+            image_generation_options = sanitize_chat_image_generation_options(
+                features.get("image_generation_options")
+            )
 
             selected_image_model = str(
                 model.get("model_id")
@@ -3343,6 +3345,8 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             features["image_generation"] = True
             if image_generation_options:
                 features["image_generation_options"] = image_generation_options
+            else:
+                features.pop("image_generation_options", None)
 
     if isinstance(features, dict) and features.get("image_generation"):
         skip_text_enhancements = True

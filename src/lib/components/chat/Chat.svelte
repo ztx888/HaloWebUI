@@ -390,12 +390,20 @@
 	let selectedSkillIds = [];
 	let skillSelectionTouched = false;
 	let imageGenerationEnabled = false;
-	let imageGenerationOptions: {
+	type ImageGenerationOptions = {
+		model?: string | null;
+		model_ref?: Record<string, unknown> | null;
 		image_size?: string | null;
 		aspect_ratio?: string | null;
 		resolution?: string | null;
 		n?: number | null;
-	} = {};
+		negative_prompt?: string | null;
+		credential_source?: string | null;
+		connection_index?: number | null;
+		steps?: number | null;
+		background?: string | null;
+	};
+	let imageGenerationOptions: ImageGenerationOptions = {};
 	let webSearchMode: WebSearchMode = 'off';
 	let webSearchModeSource: WebSearchModeSource = 'default';
 	let codeInterpreterEnabled = false;
@@ -1085,12 +1093,7 @@
 	};
 
 	const getImageGenerationOptionsPayload = () => {
-		const raw = imageGenerationOptions ?? {};
-		const payload = Object.fromEntries(
-			Object.entries(raw).filter(
-				([, value]) => value !== undefined && value !== null && value !== ''
-			)
-		);
+		const payload = sanitizeChatImageGenerationOptions(imageGenerationOptions);
 		const dedicatedImageModel = getSingleSelectedDedicatedImageModel();
 		if (dedicatedImageModel?.id) {
 			payload.model = getModelRequestId(dedicatedImageModel);
@@ -1100,6 +1103,41 @@
 			}
 		}
 		return Object.keys(payload).length > 0 ? payload : undefined;
+	};
+
+	const chatImageGenerationOptionKeys = [
+		'model',
+		'model_ref',
+		'image_size',
+		'aspect_ratio',
+		'resolution',
+		'n',
+		'negative_prompt',
+		'credential_source',
+		'connection_index',
+		'steps',
+		'background'
+	] as const;
+
+	const sanitizeChatImageGenerationOptions = (options: unknown): ImageGenerationOptions => {
+		if (!options || typeof options !== 'object' || Array.isArray(options)) {
+			return {};
+		}
+
+		const raw = options as Record<string, unknown>;
+		const payload: Record<string, unknown> = {};
+		for (const key of chatImageGenerationOptionKeys) {
+			const value = raw[key];
+			if (value === undefined || value === null || value === '') {
+				continue;
+			}
+			if (key === 'model_ref' && (typeof value !== 'object' || Array.isArray(value))) {
+				continue;
+			}
+			payload[key] = value;
+		}
+
+		return payload as ImageGenerationOptions;
 	};
 
 	const supportsToolValvesContext = (id: string | null | undefined): id is string =>
@@ -1217,7 +1255,7 @@
 		web_search_mode: webSearchMode,
 		web_search_mode_source: webSearchModeSource,
 		image_generation_enabled: imageGenerationEnabled,
-		image_generation_options: imageGenerationOptions,
+		image_generation_options: sanitizeChatImageGenerationOptions(imageGenerationOptions),
 		code_interpreter_enabled: codeInterpreterEnabled,
 		reasoning_effort: reasoningEffort,
 		max_thinking_tokens: maxThinkingTokens
@@ -1235,7 +1273,7 @@
 		activeAssistant,
 		systemPrompt: typeof params?.system === 'string' ? params.system : null,
 		imageGenerationEnabled,
-		imageGenerationOptions,
+		imageGenerationOptions: sanitizeChatImageGenerationOptions(imageGenerationOptions),
 		codeInterpreterEnabled,
 		reasoningEffort,
 		maxThinkingTokens
@@ -1322,8 +1360,9 @@
 			state.image_generation_options !== undefined ||
 			state.imageGenerationOptions !== undefined
 		) {
-			imageGenerationOptions =
-				state.image_generation_options ?? state.imageGenerationOptions ?? {};
+			imageGenerationOptions = sanitizeChatImageGenerationOptions(
+				state.image_generation_options ?? state.imageGenerationOptions ?? {}
+			);
 		}
 		if (
 			state.code_interpreter_enabled !== undefined ||
