@@ -150,7 +150,12 @@ def test_cleanup_legacy_image_generation_options_is_idempotent():
                 "id": 1,
                 "data": {
                     "image_generation": {
+                        "engine": "gemini",
                         "size": "900x1600",
+                        "model": "old-image-model",
+                        "aspect_ratio": "16:9",
+                        "resolution": "2k",
+                        "steps": 30,
                         "model_filter_regex": "gpt-image",
                     },
                     "other": "keep",
@@ -180,10 +185,7 @@ def test_cleanup_legacy_image_generation_options_is_idempotent():
     }
     assert config_after_first == config_after_second
     assert chat_after_first == chat_after_second
-    assert config_after_first["image_generation"] == {
-        "size": "auto",
-        "model_filter_regex": "gpt-image",
-    }
+    assert config_after_first["image_generation"] == {"model_filter_regex": "gpt-image"}
     assert chat_after_first["image_generation_options"] == {
         "model": "gpt-image-2",
         "aspect_ratio": "16:9",

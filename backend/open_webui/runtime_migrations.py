@@ -37,7 +37,7 @@ HALO_STATE_TABLE = "halowebui_migration_state"
 HALO_DATA_MIGRATION_TABLE = "halowebui_data_migrations"
 HALO_TARGET_HEAD = "3d4e5f6a7b8c"
 HALO_CONNECTION_METADATA_BACKFILL_KEY = "connection_metadata_backfill_v2"
-HALO_IMAGE_GENERATION_OPTIONS_CLEANUP_KEY = "image_generation_options_cleanup_v1"
+HALO_IMAGE_GENERATION_OPTIONS_CLEANUP_KEY = "image_generation_options_cleanup_v2"
 HALO_SOURCE_FAMILIES = {
     "c440947495f3": "owui_070_family",
     "a1b2c3d4e5f6": "owui_080_family",
@@ -839,10 +839,20 @@ def _cleanup_legacy_image_generation_options(conn: Connection) -> dict[str, int]
             if not isinstance(image_generation, dict):
                 continue
 
-            if image_generation.get("size") == "auto":
+            changed = False
+            for key in ("model", "size", "aspect_ratio", "resolution", "steps"):
+                if key in image_generation:
+                    image_generation.pop(key, None)
+                    changed = True
+
+            engine = str(image_generation.get("engine") or "").strip().lower()
+            if engine in {"openai", "gemini", "grok"}:
+                image_generation.pop("engine", None)
+                changed = True
+
+            if not changed:
                 continue
 
-            image_generation["size"] = "auto"
             conn.execute(
                 config_table.update()
                 .where(config_table.c.id == row["id"])

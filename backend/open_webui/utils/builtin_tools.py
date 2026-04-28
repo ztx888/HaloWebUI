@@ -749,7 +749,7 @@ def get_builtin_tools(
                             return w, h
                     except Exception:
                         pass
-                return tuple(map(int, request.app.state.config.IMAGE_SIZE.split("x")))
+                return 512, 512
 
             width, height = parse_size(size)
 
@@ -786,9 +786,6 @@ def get_builtin_tools(
                 if mask_bytes is not None:
                     data["mask"] = base64.b64encode(mask_bytes).decode("utf-8")
 
-                if request.app.state.config.IMAGE_STEPS is not None:
-                    data["steps"] = request.app.state.config.IMAGE_STEPS
-
                 if request.app.state.config.AUTOMATIC1111_CFG_SCALE:
                     data["cfg_scale"] = request.app.state.config.AUTOMATIC1111_CFG_SCALE
                 if request.app.state.config.AUTOMATIC1111_SAMPLER:
@@ -822,11 +819,7 @@ def get_builtin_tools(
                     "Authorization": f"Bearer {request.app.state.config.IMAGES_OPENAI_API_KEY}"
                 }
 
-                model = (
-                    request.app.state.config.IMAGE_GENERATION_MODEL
-                    if request.app.state.config.IMAGE_GENERATION_MODEL != ""
-                    else "dall-e-2"
-                )
+                model = "dall-e-2"
                 base_model = str(model or "").split("/")[-1].lower()
                 data = {
                     "model": model,
@@ -883,11 +876,7 @@ def get_builtin_tools(
                 import requests
 
                 init_b64 = base64.b64encode(image_bytes).decode("utf-8")
-                model = (
-                    request.app.state.config.IMAGE_GENERATION_MODEL
-                    if request.app.state.config.IMAGE_GENERATION_MODEL != ""
-                    else "imagen-3.0-capability-001"
-                )
+                model = "imagen-3.0-capability-001"
 
                 headers_g: Dict[str, str] = {
                     "Content-Type": "application/json",

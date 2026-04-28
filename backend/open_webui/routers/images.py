@@ -206,6 +206,7 @@ GROK_IMAGE_ASPECT_RATIOS = (
     "9:20",
     "auto",
 )
+MODERN_IMAGE_PROVIDERS = ("openai", "gemini", "grok")
 
 
 def _redact_upstream_headers(headers: dict[str, Any]) -> dict[str, str]:
@@ -2240,9 +2241,9 @@ async def _discover_image_model_search_candidates_for_source(
             continue
         if not _raw_model_matches_image_search(raw_model, query):
             continue
-        if _classify_raw_image_model_for_engine(engine, raw_model, source):
-            continue
-        candidate = _build_image_model_search_candidate(engine, raw_model, source)
+        candidate = _classify_raw_image_model_for_engine(
+            engine, raw_model, source
+        ) or _build_image_model_search_candidate(engine, raw_model, source)
         if not candidate:
             continue
         key = str(candidate.get("selection_id") or candidate.get("id") or "").strip()
@@ -2475,28 +2476,91 @@ async def _discover_image_models(
 
     normalized_context = _normalize_context(context)
     normalized_credential_source = _normalize_credential_source(credential_source)
+    providers = MODERN_IMAGE_PROVIDERS
 
     if normalized_context != "runtime":
-        source = _resolve_image_provider_source(
-            request,
-            user,
-            engine,
-            context=normalized_context,
-            credential_source=normalized_credential_source,
-            connection_index=connection_index,
-            strict=strict,
-        )
-        if source is None:
-            return []
+        models: list[dict[str, Any]] = []
+        first_error: Optional[HTTPException] = None
+        for provider in providers:
+            source = _resolve_image_provider_source(
+                request,
+                user,
+                provider,
+                context=normalized_context,
+                credential_source=normalized_credential_source,
+                connection_index=connection_index,
+                strict=False,
+            )
+            if source is None:
+                continue
 
-        return await _discover_image_models_for_source(request, user, engine, source)
+            try:
+                models.extend(
+                    await _discover_image_models_for_source(
+                        request, user, provider, source
+                    )
+                )
+            except HTTPException as error:
+                if first_error is None:
+                    first_error = error
+                continue
 
+        if models:
+            return _sort_discovered_image_models(models)
+        if first_error is not None and strict:
+            raise first_error
+        return []
+
+    results = await asyncio.gather(
+        *[
+            _discover_image_models_for_provider(
+                request,
+                user,
+                provider,
+                context=normalized_context,
+                credential_source=normalized_credential_source,
+                connection_index=connection_index,
+                strict=False,
+            )
+            for provider in providers
+        ],
+        return_exceptions=True,
+    )
+
+    models: list[dict[str, Any]] = []
+    first_error: Optional[HTTPException] = None
+    for result in results:
+        if isinstance(result, HTTPException):
+            if first_error is None:
+                first_error = result
+            continue
+        if isinstance(result, Exception):
+            continue
+        models.extend(result)
+
+    if models:
+        return _sort_discovered_image_models(models)
+    if first_error is not None and strict:
+        raise first_error
+    return []
+
+
+async def _discover_image_models_for_provider(
+    request: Request,
+    user,
+    engine: str,
+    *,
+    context: str = "runtime",
+    credential_source: Optional[str] = None,
+    connection_index: Optional[int] = None,
+    strict: bool = False,
+) -> list[dict[str, Any]]:
     sources = _list_image_provider_sources(
         request,
         user,
         engine,
-        context=normalized_context,
-        credential_source=normalized_credential_source,
+        context=context,
+        credential_source=credential_source,
         connection_index=connection_index,
         strict=strict,
     )
@@ -2531,29 +2595,72 @@ async def _discover_image_model_search_candidates(
 
     normalized_context = _normalize_context(context)
     normalized_credential_source = _normalize_credential_source(credential_source)
+    providers = MODERN_IMAGE_PROVIDERS
 
     if normalized_context != "runtime":
-        source = _resolve_image_provider_source(
-            request,
-            user,
-            engine,
-            context=normalized_context,
-            credential_source=normalized_credential_source,
-            connection_index=connection_index,
-            strict=strict,
-        )
-        if source is None:
-            return []
-        return await _discover_image_model_search_candidates_for_source(
-            request, user, engine, source, query
-        )
+        candidates: list[dict[str, Any]] = []
+        for provider in providers:
+            source = _resolve_image_provider_source(
+                request,
+                user,
+                provider,
+                context=normalized_context,
+                credential_source=normalized_credential_source,
+                connection_index=connection_index,
+                strict=False,
+            )
+            if source is None:
+                continue
+            candidates.extend(
+                await _discover_image_model_search_candidates_for_source(
+                    request, user, provider, source, query
+                )
+            )
+        return _sort_discovered_image_models(candidates)
 
+    results = await asyncio.gather(
+        *[
+            _discover_image_model_search_candidates_for_provider(
+                request,
+                user,
+                provider,
+                context=normalized_context,
+                credential_source=normalized_credential_source,
+                connection_index=connection_index,
+                search_query=query,
+                strict=False,
+            )
+            for provider in providers
+        ],
+        return_exceptions=True,
+    )
+
+    candidates: list[dict[str, Any]] = []
+    for result in results:
+        if isinstance(result, Exception):
+            continue
+        candidates.extend(result)
+
+    return _sort_discovered_image_models(candidates)
+
+
+async def _discover_image_model_search_candidates_for_provider(
+    request: Request,
+    user,
+    engine: str,
+    *,
+    context: str = "runtime",
+    credential_source: Optional[str] = None,
+    connection_index: Optional[int] = None,
+    search_query: str = "",
+    strict: bool = False,
+) -> list[dict[str, Any]]:
     sources = _list_image_provider_sources(
         request,
         user,
         engine,
-        context=normalized_context,
-        credential_source=normalized_credential_source,
+        context=context,
+        credential_source=credential_source,
         connection_index=connection_index,
         strict=strict,
     )
@@ -2563,12 +2670,12 @@ async def _discover_image_model_search_candidates(
     if len(sources) == 1:
         return _sort_discovered_image_models(
             await _discover_image_model_search_candidates_for_source(
-                request, user, engine, sources[0], query
+                request, user, engine, sources[0], search_query
             )
         )
 
     return await _discover_image_model_search_candidates_from_sources(
-        request, user, engine, sources, query
+        request, user, engine, sources, search_query
     )
 
 
@@ -3049,13 +3156,13 @@ async def get_usage_config(request: Request, user=Depends(get_verified_user)):
 
     return {
         "enabled": bool(getattr(cfg, "ENABLE_IMAGE_GENERATION", False)),
-        "engine": engine,
+        "engine": "auto" if engine in {"openai", "gemini", "grok"} else engine,
         "defaults": {
-            "model": getattr(cfg, "IMAGE_GENERATION_MODEL", "") or "",
-            "size": getattr(cfg, "IMAGE_SIZE", "") or "",
-            "aspect_ratio": getattr(cfg, "IMAGE_ASPECT_RATIO", "") or "",
-            "resolution": getattr(cfg, "IMAGE_RESOLUTION", "") or "",
-            "steps": getattr(cfg, "IMAGE_STEPS", 0),
+            "model": "",
+            "size": "auto",
+            "aspect_ratio": "",
+            "resolution": "",
+            "steps": 0,
         },
         "shared_key": {"enabled": shared_enabled, "available": shared_available},
         "personal_key": {"supported": personal_supported, "provider": provider},
@@ -3084,64 +3191,13 @@ def set_image_model(request: Request, model: str):
     return request.app.state.config.IMAGE_GENERATION_MODEL
 
 
-def get_image_model(request):
-    if request.app.state.config.IMAGE_GENERATION_ENGINE == "openai":
-        return (
-            request.app.state.config.IMAGE_GENERATION_MODEL
-            if request.app.state.config.IMAGE_GENERATION_MODEL
-            else "dall-e-2"
-        )
-    elif request.app.state.config.IMAGE_GENERATION_ENGINE == "gemini":
-        return (
-            request.app.state.config.IMAGE_GENERATION_MODEL
-            if request.app.state.config.IMAGE_GENERATION_MODEL
-            else "imagen-3.0-generate-002"
-        )
-    elif request.app.state.config.IMAGE_GENERATION_ENGINE == "grok":
-        return (
-            request.app.state.config.IMAGE_GENERATION_MODEL
-            if request.app.state.config.IMAGE_GENERATION_MODEL
-            else "grok-imagine-image"
-        )
-    elif request.app.state.config.IMAGE_GENERATION_ENGINE == "comfyui":
-        return (
-            request.app.state.config.IMAGE_GENERATION_MODEL
-            if request.app.state.config.IMAGE_GENERATION_MODEL
-            else ""
-        )
-    elif (
-        request.app.state.config.IMAGE_GENERATION_ENGINE == "automatic1111"
-        or request.app.state.config.IMAGE_GENERATION_ENGINE == ""
-    ):
-        try:
-            r = requests.get(
-                url=f"{request.app.state.config.AUTOMATIC1111_BASE_URL}/sdapi/v1/options",
-                headers={"authorization": get_automatic1111_api_auth(request)},
-                verify=REQUESTS_VERIFY,
-            )
-            options = r.json()
-            return options["sd_model_checkpoint"]
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=ERROR_MESSAGES.DEFAULT(e))
-
-
 class ImageConfigForm(BaseModel):
-    MODEL: Optional[str] = None
-    IMAGE_SIZE: Optional[str] = None
-    IMAGE_ASPECT_RATIO: Optional[str] = None
-    IMAGE_RESOLUTION: Optional[str] = None
-    IMAGE_STEPS: Optional[int] = None
     IMAGE_MODEL_FILTER_REGEX: Optional[str] = None
 
 
 @router.get("/image/config")
 async def get_image_config(request: Request, user=Depends(get_admin_user)):
     return {
-        "MODEL": request.app.state.config.IMAGE_GENERATION_MODEL,
-        "IMAGE_SIZE": request.app.state.config.IMAGE_SIZE,
-        "IMAGE_ASPECT_RATIO": getattr(request.app.state.config, "IMAGE_ASPECT_RATIO", "1:1"),
-        "IMAGE_RESOLUTION": getattr(request.app.state.config, "IMAGE_RESOLUTION", "1k"),
-        "IMAGE_STEPS": request.app.state.config.IMAGE_STEPS,
         "IMAGE_MODEL_FILTER_REGEX": request.app.state.config.IMAGE_MODEL_FILTER_REGEX,
     }
 
@@ -3150,52 +3206,6 @@ async def get_image_config(request: Request, user=Depends(get_admin_user)):
 async def update_image_config(
     request: Request, form_data: ImageConfigForm, user=Depends(get_admin_user)
 ):
-    if _form_field_was_set(form_data, "MODEL"):
-        model = str(form_data.MODEL or "").strip()
-        if model:
-            set_image_model(request, model)
-        else:
-            request.app.state.config.IMAGE_GENERATION_MODEL = ""
-
-    if _form_field_was_set(form_data, "IMAGE_SIZE"):
-        image_size = str(form_data.IMAGE_SIZE or "").strip().lower() or "auto"
-        if image_size == "auto" or re.match(r"^\d+x\d+$", image_size):
-            request.app.state.config.IMAGE_SIZE = image_size
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail=ERROR_MESSAGES.INCORRECT_FORMAT("  (e.g., auto or 1024x1024)."),
-            )
-
-    if _form_field_was_set(form_data, "IMAGE_ASPECT_RATIO"):
-        image_aspect_ratio = str(form_data.IMAGE_ASPECT_RATIO or "").strip() or "1:1"
-        if image_aspect_ratio in GROK_IMAGE_ASPECT_RATIOS:
-            request.app.state.config.IMAGE_ASPECT_RATIO = image_aspect_ratio
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail=ERROR_MESSAGES.INCORRECT_FORMAT("  (invalid aspect ratio)."),
-            )
-
-    if _form_field_was_set(form_data, "IMAGE_RESOLUTION"):
-        image_resolution = str(form_data.IMAGE_RESOLUTION or "").strip().lower() or "1k"
-        if image_resolution in GROK_IMAGE_RESOLUTIONS:
-            request.app.state.config.IMAGE_RESOLUTION = image_resolution
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail=ERROR_MESSAGES.INCORRECT_FORMAT("  (invalid resolution)."),
-            )
-
-    if _form_field_was_set(form_data, "IMAGE_STEPS"):
-        if form_data.IMAGE_STEPS is not None and form_data.IMAGE_STEPS >= 0:
-            request.app.state.config.IMAGE_STEPS = form_data.IMAGE_STEPS
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail=ERROR_MESSAGES.INCORRECT_FORMAT("  (e.g., 50)."),
-            )
-
     if form_data.IMAGE_MODEL_FILTER_REGEX is not None:
         if form_data.IMAGE_MODEL_FILTER_REGEX:
             try:
@@ -3208,11 +3218,6 @@ async def update_image_config(
         request.app.state.config.IMAGE_MODEL_FILTER_REGEX = form_data.IMAGE_MODEL_FILTER_REGEX
 
     return {
-        "MODEL": request.app.state.config.IMAGE_GENERATION_MODEL,
-        "IMAGE_SIZE": request.app.state.config.IMAGE_SIZE,
-        "IMAGE_ASPECT_RATIO": request.app.state.config.IMAGE_ASPECT_RATIO,
-        "IMAGE_RESOLUTION": request.app.state.config.IMAGE_RESOLUTION,
-        "IMAGE_STEPS": request.app.state.config.IMAGE_STEPS,
         "IMAGE_MODEL_FILTER_REGEX": request.app.state.config.IMAGE_MODEL_FILTER_REGEX,
     }
 
@@ -3241,6 +3246,7 @@ async def get_models(
             connection_index=connection_index,
             strict=False,
         )
+        models = _apply_image_model_regex_filter(request, models)
         if str(search or "").strip():
             search_candidates = await _discover_image_model_search_candidates(
                 request,
@@ -3257,7 +3263,7 @@ async def get_models(
     except Exception as e:
         raise HTTPException(status_code=400, detail=ERROR_MESSAGES.DEFAULT(e))
 
-    return _apply_image_model_regex_filter(request, models)
+    return models
 
 
 class GenerateImageForm(BaseModel):
@@ -4826,11 +4832,7 @@ async def image_generations(
             detail="Image generation is disabled by the administrator.",
         )
 
-    configured_size_value = (
-        "auto" if form_data.chat_generation else request.app.state.config.IMAGE_SIZE
-    )
-    configured_size = str(configured_size_value or "auto").strip().lower() or "auto"
-    effective_size = _normalize_exact_image_size(configured_size)
+    effective_size = None
     if not form_data.chat_generation and form_data.size is not None:
         requested_size = str(form_data.size or "").strip().lower() or "auto"
         if requested_size == "auto":
@@ -4843,14 +4845,9 @@ async def image_generations(
                 detail=ERROR_MESSAGES.INCORRECT_FORMAT("  (e.g., auto or 1024x1024)."),
             )
     requested_aspect_ratio = _normalize_gemini_aspect_ratio(form_data.aspect_ratio)
-    requested_grok_aspect_ratio = _normalize_grok_aspect_ratio(
-        form_data.aspect_ratio
-        or getattr(request.app.state.config, "IMAGE_ASPECT_RATIO", None)
-    )
+    requested_grok_aspect_ratio = _normalize_grok_aspect_ratio(form_data.aspect_ratio)
     requested_image_size = _normalize_gemini_image_size(form_data.image_size)
-    requested_grok_resolution = _normalize_grok_resolution(
-        form_data.resolution or getattr(request.app.state.config, "IMAGE_RESOLUTION", None)
-    )
+    requested_grok_resolution = _normalize_grok_resolution(form_data.resolution)
     if not requested_aspect_ratio:
         requested_aspect_ratio = _size_to_aspect_ratio(effective_size)
     if not requested_grok_aspect_ratio:
@@ -4862,9 +4859,7 @@ async def image_generations(
 
     raster_size = effective_size or "512x512"
     width, height = tuple(map(int, raster_size.split("x")))
-    selected_model_value = str(
-        form_data.model or request.app.state.config.IMAGE_GENERATION_MODEL or ""
-    ).strip()
+    selected_model_value = str(form_data.model or "").strip()
     _selection_hint, selected_model = _split_image_model_selection_key(selected_model_value)
     model_ref = dict(form_data.model_ref) if isinstance(form_data.model_ref, dict) else {}
     parsed_selection_id = parse_selection_id(selected_model_value)
@@ -4885,7 +4880,67 @@ async def image_generations(
     model_ref_provider = str(model_ref.get("provider") or "").strip().lower()
     if model_ref_provider in {"openai", "gemini", "grok"}:
         selected_engine = model_ref_provider
+    elif isinstance(_selection_hint, dict):
+        selection_provider = str(_selection_hint.get("provider") or "").strip().lower()
+        if selection_provider in {"openai", "gemini", "grok"}:
+            selected_engine = selection_provider
     connection_user = getattr(getattr(request, "state", None), "connection_user", None) or user
+
+    if (
+        selected_engine in {"openai", "gemini", "grok"}
+        and model_ref_provider not in {"openai", "gemini", "grok"}
+        and not _selection_hint
+    ):
+        if selected_model:
+            matched_providers: list[str] = []
+            for provider in MODERN_IMAGE_PROVIDERS:
+                try:
+                    provider_models = await _discover_image_models_for_provider(
+                        request,
+                        connection_user,
+                        provider,
+                        context="runtime",
+                        credential_source="auto",
+                        strict=False,
+                    )
+                except Exception:
+                    continue
+
+                if any(
+                    str(model.get("id") or "").strip() == selected_model
+                    or selected_model
+                    in [
+                        str(value or "").strip()
+                        for value in (model.get("legacy_ids") or [])
+                    ]
+                    for model in provider_models
+                ):
+                    matched_providers.append(provider)
+
+            if len(matched_providers) == 1:
+                selected_engine = matched_providers[0]
+            elif len(matched_providers) > 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail=build_model_resolution_error(
+                        code=AMBIGUOUS_MODEL_CODE,
+                        detail=AMBIGUOUS_MODEL_DETAIL,
+                        requested_model_id=selected_model_value,
+                    ),
+                )
+        else:
+            for provider in MODERN_IMAGE_PROVIDERS:
+                sources = _list_image_provider_sources(
+                    request,
+                    connection_user,
+                    provider,
+                    context="runtime",
+                    credential_source="auto",
+                    strict=False,
+                )
+                if sources:
+                    selected_engine = provider
+                    break
 
     r = None
     try:
@@ -4959,7 +5014,7 @@ async def image_generations(
                     selected_model_meta = discovered_models[0]
                 selected_model = (
                     str((selected_model_meta or {}).get("id") or "").strip()
-                    or get_image_model(request)
+                    or "dall-e-2"
                 )
 
             if not selected_model_meta and selected_model:
@@ -5112,7 +5167,7 @@ async def image_generations(
                     selected_model_meta = discovered_models[0]
                 selected_model = (
                     str((selected_model_meta or {}).get("id") or "").strip()
-                    or get_image_model(request)
+                    or "imagen-3.0-generate-002"
                 )
 
             if not selected_model_meta and selected_model:
@@ -5243,7 +5298,7 @@ async def image_generations(
                     selected_model_meta = discovered_models[0]
                 selected_model = (
                     str((selected_model_meta or {}).get("id") or "").strip()
-                    or get_image_model(request)
+                    or "grok-imagine-image"
                 )
 
             if not selected_model_meta and selected_model:
@@ -5289,10 +5344,6 @@ async def image_generations(
                 "n": form_data.n,
             }
 
-            if request.app.state.config.IMAGE_STEPS is not None:
-                data["steps"] = request.app.state.config.IMAGE_STEPS
-
-            # Per-request steps override
             if form_data.steps is not None:
                 data["steps"] = form_data.steps
 
@@ -5359,10 +5410,6 @@ async def image_generations(
                 "height": height,
             }
 
-            if request.app.state.config.IMAGE_STEPS is not None:
-                data["steps"] = request.app.state.config.IMAGE_STEPS
-
-            # Per-request steps override
             if form_data.steps is not None:
                 data["steps"] = form_data.steps
 

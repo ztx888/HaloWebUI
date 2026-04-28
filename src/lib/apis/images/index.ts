@@ -31,11 +31,6 @@ export type ImageUsageConfig = {
 };
 
 export type ImageGenerationConfig = {
-	MODEL?: string;
-	IMAGE_SIZE?: string;
-	IMAGE_ASPECT_RATIO?: string;
-	IMAGE_RESOLUTION?: string;
-	IMAGE_STEPS?: number;
 	IMAGE_MODEL_FILTER_REGEX?: string | null;
 };
 

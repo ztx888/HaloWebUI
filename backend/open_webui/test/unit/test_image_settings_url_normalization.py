@@ -376,11 +376,11 @@ def test_image_config_update_accepts_filter_only_without_touching_model(monkeypa
         )
     )
 
-    assert response["MODEL"] == "old-model"
-    assert response["IMAGE_SIZE"] == "1024x1024"
-    assert response["IMAGE_ASPECT_RATIO"] == "16:9"
-    assert response["IMAGE_RESOLUTION"] == "2k"
-    assert response["IMAGE_STEPS"] == 30
+    assert cfg.IMAGE_GENERATION_MODEL == "old-model"
+    assert cfg.IMAGE_SIZE == "1024x1024"
+    assert cfg.IMAGE_ASPECT_RATIO == "16:9"
+    assert cfg.IMAGE_RESOLUTION == "2k"
+    assert cfg.IMAGE_STEPS == 30
     assert response["IMAGE_MODEL_FILTER_REGEX"] == "gpt-image|imagen"
 
 
@@ -516,7 +516,11 @@ def test_runtime_image_models_merge_all_available_sources(monkeypatch):
             }
         ]
 
-    monkeypatch.setattr(images_router, "_list_image_provider_sources", lambda *_args, **_kwargs: sources)
+    monkeypatch.setattr(
+        images_router,
+        "_list_image_provider_sources",
+        lambda _request, _user, provider, **_kwargs: sources if provider == "openai" else [],
+    )
     monkeypatch.setattr(images_router, "_discover_image_models_for_source", fake_discover)
 
     models = asyncio.run(
@@ -530,6 +534,49 @@ def test_runtime_image_models_merge_all_available_sources(monkeypatch):
 
     assert [model["id"] for model in models] == ["flux-kontext-pro", "gpt-image-2"]
     assert {model["source"] for model in models} == {"personal", "shared"}
+
+
+def test_runtime_image_models_do_not_depend_on_saved_legacy_engine(monkeypatch):
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                config=SimpleNamespace(
+                    IMAGE_GENERATION_ENGINE="gemini",
+                    IMAGE_MODEL_FILTER_REGEX="",
+                )
+            )
+        )
+    )
+    user = SimpleNamespace(id="user-1")
+    openai_source = {
+        "provider": "openai",
+        "effective_source": "personal",
+        "base_url": "https://openai.example.com/v1",
+        "connection_index": 0,
+        "connection_name": "OpenAI",
+    }
+
+    def fake_sources(_request, _user, provider, **_kwargs):
+        return [openai_source] if provider == "openai" else []
+
+    async def fake_discover(_request, _user, engine, source):
+        assert engine == "openai"
+        assert source == openai_source
+        return [{"id": "gpt-image-2", "source": "personal"}]
+
+    monkeypatch.setattr(images_router, "_list_image_provider_sources", fake_sources)
+    monkeypatch.setattr(images_router, "_discover_image_models_for_source", fake_discover)
+
+    models = asyncio.run(
+        _discover_image_models(
+            request,
+            user,
+            context="runtime",
+            credential_source="auto",
+        )
+    )
+
+    assert [model["id"] for model in models] == ["gpt-image-2"]
 
 
 def test_runtime_image_models_keep_duplicate_ids_with_distinct_selection_keys(monkeypatch):
@@ -573,7 +620,11 @@ def test_runtime_image_models_keep_duplicate_ids_with_distinct_selection_keys(mo
             }
         ]
 
-    monkeypatch.setattr(images_router, "_list_image_provider_sources", lambda *_args, **_kwargs: sources)
+    monkeypatch.setattr(
+        images_router,
+        "_list_image_provider_sources",
+        lambda _request, _user, provider, **_kwargs: sources if provider == "openai" else [],
+    )
     monkeypatch.setattr(images_router, "_discover_image_models_for_source", fake_discover)
 
     models = asyncio.run(
@@ -707,7 +758,11 @@ def test_runtime_image_models_keep_successful_sources_when_one_source_fails(monk
             }
         ]
 
-    monkeypatch.setattr(images_router, "_list_image_provider_sources", lambda *_args, **_kwargs: sources)
+    monkeypatch.setattr(
+        images_router,
+        "_list_image_provider_sources",
+        lambda _request, _user, provider, **_kwargs: sources if provider == "openai" else [],
+    )
     monkeypatch.setattr(images_router, "_discover_image_models_for_source", fake_discover)
 
     models = asyncio.run(
@@ -746,6 +801,66 @@ def test_runtime_image_models_regex_filter_still_applies_to_final_list():
     assert [model["id"] for model in filtered] == ["gpt-image-2", "imagen-4-preview"]
 
 
+def test_image_model_search_results_bypass_saved_regex_filter(monkeypatch):
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                config=SimpleNamespace(IMAGE_MODEL_FILTER_REGEX="gpt-image")
+            )
+        )
+    )
+    user = SimpleNamespace(id="admin", role="admin")
+
+    async def fake_discover(*_args, **_kwargs):
+        return [{"id": "gpt-image-2"}, {"id": "flux-kontext-pro"}]
+
+    async def fake_search(*_args, **_kwargs):
+        return [{"id": "rgb-new-model", "detection_method": "search"}]
+
+    monkeypatch.setattr(images_router, "_discover_image_models", fake_discover)
+    monkeypatch.setattr(
+        images_router, "_discover_image_model_search_candidates", fake_search
+    )
+
+    models = asyncio.run(
+        images_router.get_models(request, context="workspace", search="rgb", user=user)
+    )
+
+    assert [model["id"] for model in models] == ["gpt-image-2", "rgb-new-model"]
+
+
+def test_image_model_search_can_return_detected_models_hidden_from_base_list(monkeypatch):
+    request = SimpleNamespace()
+    user = SimpleNamespace(id="user-1")
+    source = {
+        "provider": "openai",
+        "effective_source": "personal",
+        "base_url": "https://api.openai.com/v1",
+        "connection_index": 0,
+        "api_config": {},
+    }
+
+    async def fake_raw_models(*_args, **_kwargs):
+        return [{"id": "gpt-image-2", "name": "gpt-image-2"}]
+
+    monkeypatch.setattr(
+        images_router, "_list_raw_image_models_for_source", fake_raw_models
+    )
+
+    models = asyncio.run(
+        images_router._discover_image_model_search_candidates_for_source(
+            request,
+            user,
+            "openai",
+            source,
+            "gpt-image-2",
+        )
+    )
+
+    assert [model["id"] for model in models] == ["gpt-image-2"]
+    assert models[0]["generation_mode"] == "openai_images"
+
+
 def test_image_settings_context_still_uses_single_source(monkeypatch):
     request = SimpleNamespace(
         app=SimpleNamespace(
@@ -770,7 +885,13 @@ def test_image_settings_context_still_uses_single_source(monkeypatch):
         assert source == resolved_source
         return [{"id": "gpt-image-2", "name": "gpt-image-2"}]
 
-    monkeypatch.setattr(images_router, "_resolve_image_provider_source", lambda *_args, **_kwargs: resolved_source)
+    monkeypatch.setattr(
+        images_router,
+        "_resolve_image_provider_source",
+        lambda _request, _user, provider, **_kwargs: resolved_source
+        if provider == "openai"
+        else None,
+    )
     monkeypatch.setattr(images_router, "_discover_image_models_for_source", fake_discover)
 
     models = asyncio.run(

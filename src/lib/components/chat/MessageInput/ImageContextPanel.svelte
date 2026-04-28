@@ -5,7 +5,7 @@
 
 	import type { Model } from '$lib/stores';
 	import { mobile } from '$lib/stores';
-	import { getImageGenerationModels, getImageUsageConfig, type ImageGenerationModel } from '$lib/apis/images';
+	import { getImageGenerationModels, type ImageGenerationModel } from '$lib/apis/images';
 	import {
 		getUserValvesById as getFunctionUserValvesById,
 		getUserValvesSpecById as getFunctionUserValvesSpecById,
@@ -24,7 +24,6 @@
 		getImageValveProperty,
 		getPropertyEnumOptions,
 		looksLikeImageValveSpec,
-		mapLegacySizeToGeminiParams,
 		modelSupportsNativeImageOptions
 	} from '$lib/utils/image-generation';
 	import { findModelByIdentity } from '$lib/utils/model-identity';
@@ -50,6 +49,7 @@
 	let builtinEngine = '';
 	let builtinModelMeta: ImageGenerationModel | null = null;
 	let builtinRequestKey = '';
+	let currentModelIdentity = '';
 
 	let customLoading = false;
 	let customFunctionId = '';
@@ -69,39 +69,29 @@
 
 	$: syncInitialExpandState();
 
-	const applyBuiltinDefaults = (
-		size: string | null,
-		aspectRatio: string | null,
-		resolution: string | null = null
-	) => {
-		const next: ImageGenerationOptions = { ...imageGenerationOptions };
-		let changed = false;
+	const getCurrentModelIdentity = () => {
+		const model = currentModel as any;
+		return `${model?.selection_id ?? model?.selectionId ?? model?.id ?? ''}`.trim();
+	};
 
-		if ((builtinModelMeta?.supports_image_size ?? false) && !next.image_size && size) {
-			next.image_size = size;
-			changed = true;
-		}
-		if (
-			((builtinModelMeta?.size_mode ?? '') === 'aspect_ratio' ||
-				(builtinModelMeta?.supports_image_size ?? false)) &&
-			!next.aspect_ratio &&
-			aspectRatio
-		) {
-			next.aspect_ratio = aspectRatio;
-			changed = true;
-		}
-		if ((builtinModelMeta?.supports_resolution ?? false) && !next.resolution && resolution) {
-			next.resolution = resolution;
-			changed = true;
+	const getBuiltinEngineForModel = (model: ImageGenerationModel | null) => {
+		const provider = `${model?.provider ?? ''}`.trim().toLowerCase();
+		if (provider === 'gemini' || provider === 'grok') {
+			return provider;
 		}
 
-		if (changed) {
-			imageGenerationOptions = next;
+		const generationMode = `${model?.generation_mode ?? ''}`.trim().toLowerCase();
+		if (generationMode.startsWith('gemini_')) {
+			return 'gemini';
 		}
+		if (generationMode === 'xai_images' || model?.supports_resolution) {
+			return 'grok';
+		}
+		return '';
 	};
 
 	const loadBuiltinContext = async () => {
-		const requestKey = imageGenerationEnabled ? 'enabled' : 'disabled';
+		const requestKey = imageGenerationEnabled ? `enabled:${currentModelIdentity}` : 'disabled';
 		if (requestKey === builtinRequestKey) {
 			return;
 		}
@@ -114,41 +104,24 @@
 			return;
 		}
 
+		builtinReady = false;
+		builtinEngine = '';
+		builtinModelMeta = null;
 		builtinLoading = true;
 		try {
-			const usageConfig = await getImageUsageConfig(localStorage.token);
-			builtinEngine = `${usageConfig?.engine ?? ''}`.toLowerCase();
-			if (!['gemini', 'grok'].includes(builtinEngine)) {
-				builtinModelMeta = null;
-				builtinReady = true;
-				return;
-			}
-
 			const runtimeModels = await getImageGenerationModels(localStorage.token, {
 				context: 'runtime'
 			}).catch(() => []);
-			const preferredId = `${usageConfig?.defaults?.model ?? ''}`.trim();
-			const preferredModel = preferredId
-				? findModelByIdentity(runtimeModels ?? [], preferredId)
+			const preferredId = currentModelIdentity;
+			builtinModelMeta = preferredId
+				? findModelByIdentity(runtimeModels ?? [], preferredId) ?? null
 				: null;
-			builtinModelMeta =
-				preferredModel ??
-				(preferredId
-					? null
-					: ((runtimeModels ?? []).find((model) => modelSupportsNativeImageOptions(model)) ??
-						(runtimeModels ?? [])[0] ??
-						null));
+			builtinEngine = getBuiltinEngineForModel(builtinModelMeta);
 			builtinReady = true;
-
-			const mappedDefaults = mapLegacySizeToGeminiParams(usageConfig?.defaults?.size ?? '');
-			applyBuiltinDefaults(
-				mappedDefaults.imageSize,
-				`${usageConfig?.defaults?.aspect_ratio ?? mappedDefaults.aspectRatio ?? ''}`.trim() || null,
-				`${usageConfig?.defaults?.resolution ?? ''}`.trim() || null
-			);
 		} catch (error) {
 			console.error('Failed to load native image context', error);
 			builtinModelMeta = null;
+			builtinEngine = '';
 			builtinReady = true;
 		} finally {
 			builtinLoading = false;
@@ -233,7 +206,10 @@
 		}
 	};
 
+	$: currentModelIdentity = getCurrentModelIdentity();
+
 	$: if (imageGenerationEnabled) {
+		currentModelIdentity;
 		void loadBuiltinContext();
 	} else if (builtinRequestKey !== 'disabled') {
 		void loadBuiltinContext();
