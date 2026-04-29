@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { browser } from '$app/environment';
 	import { toast } from 'svelte-sonner';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
@@ -110,7 +111,8 @@
 
 	let selectedChatId = null;
 	let showDropdown = false;
-	let showPinnedChat = true;
+	let showPinnedChat = browser ? localStorage?.showPinnedChat !== 'false' : true;
+	let showAssistantSection = browser ? localStorage?.showAssistantSection !== 'false' : true;
 
 	let showCreateChannel = false;
 
@@ -425,6 +427,9 @@
 
 	onMount(async () => {
 		showPinnedChat = localStorage?.showPinnedChat ? localStorage.showPinnedChat === 'true' : true;
+		showAssistantSection = localStorage?.showAssistantSection
+			? localStorage.showAssistantSection === 'true'
+			: true;
 
 		mobile.subscribe((value) => {
 			if ($showSidebar && value) {
@@ -853,13 +858,21 @@
 				{/if}
 
 				{#if !search}
-					<Folder className="px-2 mt-0.5" name={$i18n.t('Assistants')} dragAndDrop={false}>
+					<Folder
+						className="px-2 mt-0.5"
+						name={$i18n.t('Assistants')}
+						dragAndDrop={false}
+						bind:open={showAssistantSection}
+						on:change={(e) => {
+							localStorage.setItem('showAssistantSection', e.detail);
+						}}
+					>
 						{#if assistantScenes.length > 0}
-							<div class="mt-1 flex flex-col gap-1">
+							<div class="mt-1 flex flex-col gap-0.5">
 								{#each assistantScenes as assistant}
 									<button
 										type="button"
-										class="mx-2 flex w-auto items-center gap-2 rounded-xl px-3 py-2 text-left text-sm transition {($selectedAssistantScene?.id ?? null) ===
+										class="mx-2 flex w-auto items-center gap-2.5 rounded-xl px-3 py-2 text-left text-sm transition {($selectedAssistantScene?.id ?? null) ===
 										assistant.id
 											? 'bg-gray-200 text-gray-900 dark:bg-gray-800 dark:text-gray-100'
 											: 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-850'}"
@@ -872,14 +885,14 @@
 												assistant?.info?.meta?.profile_image_url ??
 												`${WEBUI_BASE_URL}/static/favicon.png`}
 											alt={getModelChatDisplayName(assistant)}
-											class="size-7 shrink-0 rounded-lg object-cover {(assistant?.meta?.profile_image_url ??
+											class="size-6 shrink-0 rounded-md object-cover {(assistant?.meta?.profile_image_url ??
 											assistant?.info?.meta?.profile_image_url)
 												? ''
 												: 'dark:invert'}"
 											draggable="false"
 										/>
 										<div class="min-w-0 flex-1">
-											<div class="line-clamp-1 font-medium">
+											<div class="line-clamp-1 text-[13px] font-semibold leading-5">
 												{getModelChatDisplayName(assistant)}
 											</div>
 										</div>
