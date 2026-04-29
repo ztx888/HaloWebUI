@@ -7,7 +7,6 @@
 	import InlineDirtyActions from './InlineDirtyActions.svelte';
 	import { WEBUI_BUILD_HASH, WEBUI_VERSION } from '$lib/constants';
 	import { config, showChangelog } from '$lib/stores';
-	import { pwaInstallState, promptPWAInstall } from '$lib/utils/pwa';
 	import { onMount, getContext } from 'svelte';
 	import { toast } from 'svelte-sonner';
 
@@ -165,32 +164,6 @@
 			})()
 		]);
 	});
-
-	const getPWAInstallHint = () => {
-		if ($pwaInstallState.installed) {
-			return $i18n.t('Halo WebUI is already installed on this device.');
-		}
-
-		if ($pwaInstallState.canInstall) {
-			return $i18n.t('The browser can install Halo WebUI directly on this device.');
-		}
-
-		if ($pwaInstallState.manualHint === 'android') {
-			return $i18n.t(
-				'On Android Chrome or Samsung Internet, open the browser menu and choose Install app or Add to Home screen.'
-			);
-		}
-
-		if ($pwaInstallState.manualHint === 'ios') {
-			return $i18n.t(
-				'On iPhone or iPad Safari, tap Share and then choose Add to Home Screen.'
-			);
-		}
-
-		return $i18n.t(
-			'If your browser does not show a direct install button, use the browser menu to install this site as an app.'
-		);
-	};
 </script>
 
 <form
@@ -387,37 +360,6 @@
 						</svg>
 						{$i18n.t("See what's new")}
 					</button>
-				</div>
-
-				<div class="glass-item px-4 py-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-					<div class="min-w-0 space-y-1">
-						<div class="text-sm font-medium text-gray-800 dark:text-gray-100">
-							{$i18n.t('Install App')}
-						</div>
-						<div class="text-xs text-gray-500 dark:text-gray-400">
-							{getPWAInstallHint()}
-						</div>
-					</div>
-
-					<div class="shrink-0 flex items-center gap-2">
-						{#if $pwaInstallState.installed}
-							<span
-								class="inline-flex items-center px-2 py-1 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 whitespace-nowrap"
-							>
-								{$i18n.t('Installed')}
-							</span>
-						{:else if $pwaInstallState.canInstall}
-							<button
-								class="h-8 px-3 text-xs font-medium rounded-lg bg-gray-900 text-white dark:bg-white dark:text-gray-900 shadow-sm hover:opacity-90 transition-all active:scale-[0.98] whitespace-nowrap"
-								type="button"
-								on:click={async () => {
-									await promptPWAInstall();
-								}}
-							>
-								{$i18n.t('Install Halo WebUI')}
-							</button>
-						{/if}
-					</div>
 				</div>
 			</section>
 				<!-- ====== Identity & Security ====== -->
