@@ -412,7 +412,6 @@ from open_webui.config import (
     LDAP_CIPHERS,
     # Misc
     ENV,
-    BASE_DIR,
     CACHE_DIR,
     STATIC_DIR,
     FRONTEND_BUILD_DIR,
@@ -444,6 +443,7 @@ from open_webui.config import (
 from open_webui.env import (
     AUDIT_EXCLUDED_PATHS,
     AUDIT_LOG_LEVEL,
+    BASE_DIR,
     CHANGELOG,
     REDIS_URL,
     REDIS_KEY_PREFIX,
