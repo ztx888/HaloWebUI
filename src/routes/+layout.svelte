@@ -50,6 +50,7 @@
 	import { initScrollbarAutohide } from '$lib/utils/scrollbars';
 	import { setTextScale } from '$lib/utils/text-scale';
 	import { getAllTags, getChatList } from '$lib/apis/chats';
+	import { initPWAInstallSupport } from '$lib/utils/pwa';
 	import NotificationToast from '$lib/components/NotificationToast.svelte';
 	import AppSidebar from '$lib/components/app/AppSidebar.svelte';
 
@@ -488,6 +489,8 @@
 	onMount(async () => {
 		initScrollbarAutohide();
 
+		const cleanupPWA = await initPWAInstallSupport();
+
 		if (typeof window !== 'undefined' && window.applyTheme) {
 			window.applyTheme();
 		}
@@ -628,6 +631,7 @@
 		loaded = true;
 
 		return () => {
+			cleanupPWA?.();
 			unsubscribeUser?.();
 			unsubscribeUser = null;
 			document.removeEventListener('visibilitychange', handleVisibilityChange);

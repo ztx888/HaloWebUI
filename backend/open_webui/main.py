@@ -412,6 +412,7 @@ from open_webui.config import (
     LDAP_CIPHERS,
     # Misc
     ENV,
+    BASE_DIR,
     CACHE_DIR,
     STATIC_DIR,
     FRONTEND_BUILD_DIR,
@@ -2157,30 +2158,65 @@ async def oauth_callback(provider: str, request: Request, response: Response):
 async def get_manifest_json():
     if app.state.EXTERNAL_PWA_MANIFEST_URL:
         return requests.get(app.state.EXTERNAL_PWA_MANIFEST_URL).json()
-    else:
-        return {
-            "name": app.state.WEBUI_NAME,
-            "short_name": app.state.WEBUI_NAME,
-            "description": "Open WebUI is an open, extensible, user-friendly interface for AI that adapts to your workflow.",
-            "start_url": "/",
-            "display": "standalone",
-            "background_color": "#343541",
-            "orientation": "natural",
-            "icons": [
-                {
-                    "src": "/static/logo.png",
-                    "type": "image/png",
-                    "sizes": "500x500",
-                    "purpose": "any",
-                },
-                {
-                    "src": "/static/logo.png",
-                    "type": "image/png",
-                    "sizes": "500x500",
-                    "purpose": "maskable",
-                },
-            ],
-        }
+
+    manifest_candidates = [
+        BASE_DIR / "static" / "manifest.json",
+        STATIC_DIR / "manifest.json",
+    ]
+
+    for manifest_path in manifest_candidates:
+        try:
+            if manifest_path.exists():
+                with open(manifest_path, "r", encoding="utf-8") as manifest_file:
+                    return json.load(manifest_file)
+        except Exception as exc:
+            log.warning(f"Failed to load PWA manifest from {manifest_path}: {exc}")
+
+    return {
+        "name": "Halo WebUI",
+        "short_name": "Halo",
+        "id": "/",
+        "scope": "/",
+        "description": "Halo WebUI - AI Chat Interface",
+        "start_url": "/",
+        "display": "standalone",
+        "background_color": "#171717",
+        "theme_color": "#171717",
+        "orientation": "natural",
+        "share_target": {
+            "action": "/",
+            "method": "GET",
+            "params": {
+                "text": "q",
+            },
+        },
+        "icons": [
+            {
+                "src": "/static/web-app-manifest-192x192.png",
+                "sizes": "192x192",
+                "type": "image/png",
+                "purpose": "any",
+            },
+            {
+                "src": "/static/web-app-manifest-512x512.png",
+                "sizes": "512x512",
+                "type": "image/png",
+                "purpose": "any",
+            },
+            {
+                "src": "/static/web-app-manifest-maskable-192x192.png",
+                "sizes": "192x192",
+                "type": "image/png",
+                "purpose": "maskable",
+            },
+            {
+                "src": "/static/web-app-manifest-maskable-512x512.png",
+                "sizes": "512x512",
+                "type": "image/png",
+                "purpose": "maskable",
+            },
+        ],
+    }
 
 
 @app.get("/opensearch.xml")

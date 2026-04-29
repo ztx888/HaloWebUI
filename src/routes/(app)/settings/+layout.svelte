@@ -65,6 +65,7 @@
 		audio: false,
 		dataManagement: false,
 		account: false,
+		about: false,
 		// users removed - merged into account
 		functions: false,
 		models: false,
@@ -86,6 +87,7 @@
 			audio: path.startsWith('/settings/audio') || path.startsWith('/settings/system-audio'),
 			dataManagement: path.startsWith('/settings/chats'),
 			account: path.startsWith('/settings/account'),
+			about: path.startsWith('/settings/about'),
 			// users removed - merged into account
 			functions: path.startsWith('/settings/functions'),
 			models: path.startsWith('/settings/models'),
@@ -161,6 +163,9 @@
 						<a class={navLinkClass(activeLinks.dataManagement)} href="/settings/chats">{$i18n.t('Database')}</a>
 						<a class={navLinkClass(activeLinks.account)} href="/settings/account"
 							>{$i18n.t('Account Management', { defaultValue: $i18n.t('Account') })}</a
+						>
+						<a class={navLinkClass(activeLinks.about)} href="/settings/about"
+							>{$i18n.t('About')}</a
 						>
 					{#if isAdmin}
 						<a class={navLinkClass(activeLinks.models)} href="/settings/models"
