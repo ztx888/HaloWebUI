@@ -1,6 +1,8 @@
 import json
 import logging
+import re
 import time
+from copy import deepcopy
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -165,6 +167,8 @@ async def _load_gateway_models(request: Request, owner_user):
 def _ensure_model_allowed(client, request_models: dict, requested_model: str) -> dict:
     model_entry = request_models.get(requested_model)
     if not model_entry:
+        model_entry = _find_gateway_model_by_display_id(request_models, requested_model)
+    if not model_entry:
         raise HTTPException(status_code=404, detail="Model not found")
 
     allowed = set(client.allowed_model_ids or [])
@@ -191,6 +195,94 @@ def _ensure_model_allowed(client, request_models: dict, requested_model: str) ->
     if not (candidate_ids & allowed):
         raise HTTPException(status_code=403, detail="Model is not allowed for this external client")
     return model_entry
+
+
+def _iter_unique_gateway_models(request_models: dict):
+    seen = set()
+    for model in (request_models or {}).values():
+        if not isinstance(model, dict):
+            continue
+        identity = str(get_model_selection_id(model) or model.get("id") or "").strip()
+        if not identity or identity in seen:
+            continue
+        seen.add(identity)
+        yield model
+
+
+def _get_gateway_model_connection_name(model: dict) -> str:
+    return str(model.get("connection_name") or "").strip()
+
+
+def _get_gateway_model_base_name(model: dict) -> str:
+    connection_name = _get_gateway_model_connection_name(model)
+    name = str(model.get("name") or model.get("id") or "").strip()
+    if connection_name:
+        name = re.sub(
+            rf"\s*\|\s*{re.escape(connection_name)}\s*$",
+            "",
+            name,
+        ).strip()
+    return name
+
+
+def _get_gateway_model_display_name(model: dict) -> str:
+    base_name = _get_gateway_model_base_name(model)
+    connection_name = _get_gateway_model_connection_name(model)
+    if not connection_name:
+        return base_name
+    if not base_name:
+        return connection_name
+    return f"{base_name} | {connection_name}"
+
+
+def _find_gateway_model_by_display_id(request_models: dict, requested_model: str) -> Optional[dict]:
+    if not requested_model:
+        return None
+    matches = [
+        model
+        for model in _iter_unique_gateway_models(request_models)
+        if _get_gateway_model_display_name(model) == requested_model
+    ]
+    if not matches:
+        return None
+
+    unique_matches = {}
+    for model in matches:
+        identity = str(get_model_selection_id(model) or model.get("id") or "").strip()
+        if identity and identity not in unique_matches:
+            unique_matches[identity] = model
+
+    return next(iter(unique_matches.values())) if len(unique_matches) == 1 else None
+
+
+def _serialize_gateway_model(model: dict) -> dict:
+    serialized = deepcopy(model)
+    display_name = _get_gateway_model_display_name(serialized)
+    serialized["gateway_actual_id"] = str(model.get("id") or "")
+    serialized["gateway_selection_id"] = str(get_model_selection_id(model) or "")
+    if display_name:
+        serialized["id"] = display_name
+        serialized["name"] = display_name
+    return serialized
+
+
+def _append_visible_gateway_model(visible: list[dict], seen: set[str], model: dict) -> None:
+    serialized = _serialize_gateway_model(model)
+    identity = str(
+        serialized.get("gateway_selection_id")
+        or serialized.get("gateway_actual_id")
+        or serialized.get("id")
+        or ""
+    ).strip()
+    if identity and identity in seen:
+        return
+    if identity:
+        seen.add(identity)
+    visible.append(serialized)
+
+
+def _get_gateway_internal_model_id(model: dict) -> str:
+    return str(get_model_selection_id(model) or model.get("id") or "").strip()
 
 
 def _build_gateway_metadata(client, owner_user, protocol: str, endpoint: str, payload: dict, model: dict) -> dict:
@@ -353,16 +445,15 @@ async def gateway_openai_models(request: Request):
         request_models = await _load_gateway_models(request, owner_user)
         allowed = set(client.allowed_model_ids or [])
         visible = []
-        for model_id, model in request_models.items():
+        for model in _iter_unique_gateway_models(request_models):
             candidate_ids = {
-                str(model_id),
                 str(model.get("id") or ""),
                 str(model.get("base_model_id") or ""),
                 str(get_model_selection_id(model) or ""),
             }
             candidate_ids.update({str(value) for value in get_model_aliases(model) if value})
             if candidate_ids & allowed:
-                visible.append(model)
+                visible.append(_serialize_gateway_model(model))
         response = {"data": visible}
         _audit_log(
             request=request,
@@ -399,10 +490,12 @@ async def gateway_openai_chat_completions(request: Request, form_data: dict):
     request_models = await _load_gateway_models(request, owner_user)
     requested_model = str(form_data.get("model") or "")
     model_entry = _ensure_model_allowed(client, request_models, requested_model)
+    internal_model_id = _get_gateway_internal_model_id(model_entry) or requested_model
     if _tools_requested(form_data) and not client.allow_tools:
         raise HTTPException(status_code=403, detail="Tool calling is disabled for this external client")
 
     form_data = _strip_disallowed_tools(form_data, client.allow_tools)
+    form_data["model"] = internal_model_id
     request.state.MODELS = request_models
     request.state.MODELS_AMBIGUOUS = set()
     request.state.model = model_entry
@@ -467,6 +560,7 @@ async def gateway_openai_responses(request: Request, form_data: dict):
     requested_model = str(form_data.get("model") or "")
     request_models = await _load_gateway_models(request, owner_user)
     model_entry = _ensure_model_allowed(client, request_models, requested_model)
+    internal_model_id = _get_gateway_internal_model_id(model_entry) or requested_model
     if _tools_requested(form_data) and not client.allow_tools:
         raise HTTPException(status_code=403, detail="Tool calling is disabled for this external client")
 
@@ -489,6 +583,8 @@ async def gateway_openai_responses(request: Request, form_data: dict):
 
     if api_config.get("_resolved_model_id"):
         form_data["model"] = api_config["_resolved_model_id"]
+    else:
+        form_data["model"] = internal_model_id
 
     form_data = _strip_disallowed_tools(form_data, client.allow_tools)
     payload = dict(form_data)
@@ -585,9 +681,8 @@ async def gateway_anthropic_models(request: Request):
         request_models = await _load_gateway_models(request, owner_user)
         allowed = set(client.allowed_model_ids or [])
         visible = []
-        for model_id, model in request_models.items():
+        for model in _iter_unique_gateway_models(request_models):
             candidate_ids = {
-                str(model_id),
                 str(model.get("id") or ""),
                 str(model.get("base_model_id") or ""),
                 str(get_model_selection_id(model) or ""),
@@ -597,7 +692,7 @@ async def gateway_anthropic_models(request: Request):
             if not (owned_by.startswith("anthropic") or owned_by == "claude"):
                 continue
             if candidate_ids & allowed:
-                visible.append(model)
+                visible.append(_serialize_gateway_model(model))
         response = {"data": visible}
         _audit_log(
             request=request,
@@ -634,13 +729,14 @@ async def gateway_anthropic_messages(request: Request, form_data: dict):
     request_models = await _load_gateway_models(request, owner_user)
     requested_model = str(form_data.get("model") or "")
     model_entry = _ensure_model_allowed(client, request_models, requested_model)
+    internal_model_id = _get_gateway_internal_model_id(model_entry) or requested_model
 
     anthropic_tools = form_data.get("tools")
     if isinstance(anthropic_tools, list) and anthropic_tools and not client.allow_tools:
         raise HTTPException(status_code=403, detail="Tool calling is disabled for this external client")
 
     payload = {
-        "model": requested_model,
+        "model": internal_model_id,
         "messages": form_data.get("messages", []),
         "stream": bool(form_data.get("stream", False)),
         "max_tokens": form_data.get("max_tokens"),
