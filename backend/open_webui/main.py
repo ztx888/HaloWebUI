@@ -93,6 +93,7 @@ from open_webui.routers import (
 )
 
 from open_webui.haloclaw.router import router as haloclaw_router
+from open_webui.external_api.router import router as external_api_router
 
 from open_webui.retrieval.runtime import ensure_embedding_runtime
 
@@ -1384,6 +1385,9 @@ app.include_router(terminal.router, prefix="/api/v1/terminal", tags=["terminal"]
 app.include_router(utils.router, prefix="/api/v1/utils", tags=["utils"])
 
 app.include_router(haloclaw_router, prefix="/api/v1/haloclaw", tags=["haloclaw"])
+app.include_router(
+    external_api_router, prefix="/api/v1/external_api", tags=["external_api"]
+)
 
 app.include_router(scim.router, prefix="/scim/v2", tags=["scim"])
 

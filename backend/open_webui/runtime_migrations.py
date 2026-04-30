@@ -35,7 +35,7 @@ HALO_BACKUP_DIR = Path(
 ).resolve()
 HALO_STATE_TABLE = "halowebui_migration_state"
 HALO_DATA_MIGRATION_TABLE = "halowebui_data_migrations"
-HALO_TARGET_HEAD = "3d4e5f6a7b8c"
+HALO_TARGET_HEAD = "4c8d9e0f1a2b"
 HALO_CONNECTION_METADATA_BACKFILL_KEY = "connection_metadata_backfill_v2"
 HALO_IMAGE_GENERATION_OPTIONS_CLEANUP_KEY = "image_generation_options_cleanup_v2"
 HALO_SOURCE_FAMILIES = {
@@ -1604,6 +1604,61 @@ def _ensure_halo_extra_tables(conn: Connection, backend: str) -> None:
             text(
                 'CREATE INDEX IF NOT EXISTS "ix_haloclaw_msg_log_chat" '
                 'ON "haloclaw_message_log" ("gateway_id", "platform_chat_id", "created_at")'
+            )
+        )
+
+    if not _table_exists(conn, "external_api_client"):
+        conn.execute(
+            text(
+                """
+                CREATE TABLE "external_api_client" (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    owner_user_id TEXT NOT NULL,
+                    api_key_hash TEXT NOT NULL UNIQUE,
+                    key_prefix TEXT NOT NULL,
+                    enabled BOOLEAN DEFAULT TRUE,
+                    allowed_protocols TEXT NOT NULL,
+                    allowed_model_ids TEXT NOT NULL,
+                    allow_tools BOOLEAN DEFAULT FALSE,
+                    rpm_limit INTEGER NULL,
+                    note TEXT NULL,
+                    created_at BIGINT NOT NULL,
+                    updated_at BIGINT NOT NULL,
+                    last_used_at BIGINT NULL
+                )
+                """
+            )
+        )
+
+    if not _table_exists(conn, "external_api_audit_log"):
+        conn.execute(
+            text(
+                """
+                CREATE TABLE "external_api_audit_log" (
+                    id TEXT PRIMARY KEY,
+                    client_id TEXT NOT NULL,
+                    owner_user_id TEXT NOT NULL,
+                    protocol TEXT NOT NULL,
+                    endpoint TEXT NOT NULL,
+                    model TEXT NULL,
+                    status_code INTEGER NOT NULL,
+                    tools_used BOOLEAN DEFAULT FALSE,
+                    prompt_tokens INTEGER NULL,
+                    completion_tokens INTEGER NULL,
+                    latency_ms INTEGER NULL,
+                    ip_address TEXT NULL,
+                    error TEXT NULL,
+                    meta TEXT NULL,
+                    created_at BIGINT NOT NULL
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                'CREATE INDEX IF NOT EXISTS "ix_external_api_audit_log_client_created" '
+                'ON "external_api_audit_log" ("client_id", "created_at")'
             )
         )
 
