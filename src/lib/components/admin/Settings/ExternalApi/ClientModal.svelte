@@ -22,19 +22,31 @@
 	let protocolAnthropic = true;
 	let allowedModelIds: string[] = [];
 	let modelSearch = '';
+	let prevShow = false;
 
-	$: if (show) {
-		name = client?.name ?? '';
-		ownerUserId = client?.owner_user_id ?? users?.[0]?.id ?? '';
-		allowTools = client?.allow_tools ?? false;
-		enabled = client?.enabled ?? true;
-		rpmLimit = client?.rpm_limit ?? 60;
-		note = client?.note ?? '';
-		const protocols = new Set((client?.allowed_protocols ?? ['openai', 'anthropic']).map((item) => String(item)));
+	const resetForm = (currentClient: any) => {
+		name = currentClient?.name ?? '';
+		ownerUserId = currentClient?.owner_user_id ?? users?.[0]?.id ?? '';
+		allowTools = currentClient?.allow_tools ?? false;
+		enabled = currentClient?.enabled ?? true;
+		rpmLimit = currentClient?.rpm_limit ?? 60;
+		note = currentClient?.note ?? '';
+		const protocols = new Set(
+			(currentClient?.allowed_protocols ?? ['openai', 'anthropic']).map((item) => String(item))
+		);
 		protocolOpenAI = protocols.has('openai');
 		protocolAnthropic = protocols.has('anthropic');
-		allowedModelIds = Array.isArray(client?.allowed_model_ids) ? [...client.allowed_model_ids] : [];
+		allowedModelIds = Array.isArray(currentClient?.allowed_model_ids)
+			? [...currentClient.allowed_model_ids]
+			: [];
 		modelSearch = '';
+	};
+
+	$: {
+		if (show && !prevShow) {
+			resetForm(client);
+		}
+		prevShow = show;
 	}
 
 	$: filteredModels = (models ?? []).filter((model) => {
