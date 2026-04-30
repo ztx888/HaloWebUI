@@ -3,6 +3,8 @@
 	import { createEventDispatcher, getContext } from 'svelte';
 	import Modal from '$lib/components/common/Modal.svelte';
 	import HaloSelect from '$lib/components/common/HaloSelect.svelte';
+	import { getModelChatDisplayName } from '$lib/utils/model-display';
+	import { getModelIdentityAliases, getModelSelectionId } from '$lib/utils/model-identity';
 
 	const i18n: Writable<any> = getContext('i18n');
 	const dispatch = createEventDispatcher();
@@ -53,10 +55,38 @@
 		const keyword = modelSearch.trim().toLowerCase();
 		if (!keyword) return true;
 
-		return [model?.name, model?.id]
+		return [
+			getModelChatDisplayName(model),
+			getModelSelectionId(model),
+			model?.name,
+			model?.id
+		]
 			.filter(Boolean)
 			.some((value) => String(value).toLowerCase().includes(keyword));
 	});
+
+	const getModelValue = (model: any) => getModelSelectionId(model) || String(model?.id ?? '').trim();
+
+	const getModelAliases = (model: any) =>
+		getModelIdentityAliases(model).filter((value) => String(value).trim());
+
+	const isModelSelected = (model: any) =>
+		getModelAliases(model).some((value) => allowedModelIds.includes(value));
+
+	const toggleModel = (model: any, checked: boolean) => {
+		const aliases = getModelAliases(model);
+		const value = getModelValue(model);
+		if (!value) return;
+
+		if (checked) {
+			allowedModelIds = Array.from(
+				new Set([...allowedModelIds.filter((item) => !aliases.includes(item)), value])
+			);
+			return;
+		}
+
+		allowedModelIds = allowedModelIds.filter((item) => !aliases.includes(item));
+	};
 
 	const buildProtocolList = () => {
 		const protocols = [];
@@ -158,20 +188,20 @@
 							<label class="flex items-start gap-2 rounded-lg px-2 py-1 hover:bg-gray-50 dark:hover:bg-gray-800/50">
 								<input
 									type="checkbox"
-									checked={allowedModelIds.includes(model.id)}
+									checked={isModelSelected(model)}
 									on:change={(event) => {
 										const target = event.currentTarget;
 										const checked = target instanceof HTMLInputElement ? target.checked : false;
-										if (checked) {
-											allowedModelIds = Array.from(new Set([...allowedModelIds, model.id]));
-										} else {
-											allowedModelIds = allowedModelIds.filter((item) => item !== model.id);
-										}
+										toggleModel(model, checked);
 									}}
 								/>
 								<div class="min-w-0">
-									<div class="truncate text-sm">{model.name || model.id}</div>
-									<div class="truncate text-xs text-gray-500">{model.id}</div>
+									<div class="truncate text-sm">
+										{getModelChatDisplayName(model) || model.name || model.id}
+									</div>
+									<div class="truncate text-xs text-gray-500">
+										{getModelValue(model) || model.id}
+									</div>
 								</div>
 							</label>
 						{/each}

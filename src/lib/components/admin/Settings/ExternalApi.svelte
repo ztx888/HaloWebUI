@@ -17,6 +17,7 @@
 	import ClientLogsModal from './ExternalApi/ClientLogsModal.svelte';
 	import Switch from '$lib/components/common/Switch.svelte';
 	import InlineDirtyActions from './InlineDirtyActions.svelte';
+	import { WEBUI_BASE_URL } from '$lib/constants';
 
 	const i18n: Writable<any> = getContext('i18n');
 	export let saveHandler: Function;
@@ -47,6 +48,8 @@
 	let selectedClient = null;
 	let showLogsModal = false;
 	let clientLogs = [];
+
+	const gatewayBasePath = `${WEBUI_BASE_URL}/api/v1/external_api/gateway`;
 
 	const clone = (value) => JSON.parse(JSON.stringify(value));
 
@@ -237,7 +240,7 @@
 					<label class="flex items-center justify-between glass-item px-4 py-3">
 						<div>
 							<div class="text-sm font-medium">OpenAI 网关</div>
-							<div class="text-xs text-gray-500 mt-1">提供 `/gateway/openai/v1/*` 入口</div>
+							<div class="text-xs text-gray-500 mt-1">提供 `{gatewayBasePath}/openai/v1/*` 入口</div>
 						</div>
 						<Switch bind:state={gatewayConfig.protocols.openai} />
 					</label>
@@ -245,15 +248,15 @@
 					<label class="flex items-center justify-between glass-item px-4 py-3">
 						<div>
 							<div class="text-sm font-medium">Anthropic 网关</div>
-							<div class="text-xs text-gray-500 mt-1">提供 `/gateway/anthropic/v1/*` 入口</div>
+							<div class="text-xs text-gray-500 mt-1">提供 `{gatewayBasePath}/anthropic/v1/*` 入口</div>
 						</div>
 						<Switch bind:state={gatewayConfig.protocols.anthropic} />
 					</label>
 				</div>
 
 				<div class="rounded-2xl border border-dashed border-gray-200 dark:border-gray-700 p-4 text-xs text-gray-500 space-y-1">
-					<div>OpenAI: `/gateway/openai/v1/models` `/gateway/openai/v1/chat/completions` `/gateway/openai/v1/responses`</div>
-					<div>Anthropic: `/gateway/anthropic/v1/models` `/gateway/anthropic/v1/messages`</div>
+					<div>OpenAI: `{gatewayBasePath}/openai/v1/models` `{gatewayBasePath}/openai/v1/chat/completions` `{gatewayBasePath}/openai/v1/responses`</div>
+					<div>Anthropic: `{gatewayBasePath}/anthropic/v1/models` `{gatewayBasePath}/anthropic/v1/messages`</div>
 				</div>
 			</section>
 
